@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- conduit drives other applications: it synthesizes input, reads the
+       accessibility tree and captures the screen. The App Sandbox is
+       fundamentally incompatible with that, so it stays off. Screen Recording
+       and Accessibility are granted by the user through TCC at runtime. -->
+  <key>com.apple.security.app-sandbox</key>
+  <false/>
+
+  <key>com.apple.security.automation.apple-events</key>
+  <true/>
+
+  <key>com.apple.security.device.audio-input</key>
+  <false/>
+
+  <!-- Required for the JIT-less WKWebView Tauri embeds. -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+</dict>
+</plist>

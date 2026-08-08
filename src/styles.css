@@ -1,0 +1,203 @@
+@import "tailwindcss";
+
+/* ─────────────────────────────────────────────────────────────
+   conduit design tokens
+   sky above, waves below — deep blue → blue → light blue → aqua
+   ───────────────────────────────────────────────────────────── */
+@theme {
+  --color-abyss: #04122e;
+  --color-deep: #0a2a6b;
+  --color-blue: #1b6bff;
+  --color-sky: #6ec8ff;
+  --color-aqua: #35e6d5;
+  --color-foam: #cff7ff;
+
+  --font-sans:
+    ui-sans-serif, -apple-system, "SF Pro Text", "Inter", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", monospace;
+
+  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out-soft: cubic-bezier(0.65, 0, 0.35, 1);
+}
+
+/* Semantic surface tokens. Both themes are first-class — the app is a small
+   floating square, so its chrome has to sit convincingly on any wallpaper. */
+:root {
+  --surface: 255 255 255;
+  --surface-raised: 250 252 255;
+  --surface-sunken: 241 246 252;
+  --border: 12 34 66;
+  --border-alpha: 0.1;
+  --text: 8 22 44;
+  --text-dim: 82 100 124;
+  --text-faint: 132 148 168;
+  --accent: 27 107 255;
+  --accent-soft: 110 200 255;
+  --glow: 53 230 213;
+  --shadow-app:
+    0 0 0 0.5px rgb(12 34 66 / 0.14), 0 12px 40px -8px rgb(4 18 46 / 0.3),
+    0 2px 8px -2px rgb(4 18 46 / 0.14);
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --surface: 9 16 30;
+  --surface-raised: 15 24 41;
+  --surface-sunken: 6 12 24;
+  --border: 130 180 240;
+  --border-alpha: 0.14;
+  --text: 226 238 252;
+  --text-dim: 150 170 198;
+  --text-faint: 104 124 152;
+  --accent: 110 200 255;
+  --accent-soft: 53 230 213;
+  --glow: 53 230 213;
+  --shadow-app:
+    0 0 0 0.5px rgb(130 180 240 / 0.16), 0 16px 48px -8px rgb(0 0 0 / 0.6),
+    0 2px 10px -2px rgb(0 0 0 / 0.4);
+  color-scheme: dark;
+}
+
+@layer base {
+  * {
+    -webkit-font-smoothing: antialiased;
+  }
+
+  html,
+  body {
+    height: 100%;
+    margin: 0;
+    overflow: hidden;
+    background: transparent;
+    font-family: var(--font-sans);
+    color: rgb(var(--text));
+    /* This is a desktop app, not a web page. */
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: default;
+  }
+
+  /* Only the surfaces that genuinely hold copy opt back into selection. */
+  .selectable {
+    user-select: text;
+    -webkit-user-select: text;
+    cursor: text;
+  }
+
+  #root {
+    height: 100%;
+  }
+
+  button {
+    font: inherit;
+    color: inherit;
+  }
+
+  /* The overlay must never eat a click, even if the native flags regress. */
+  body.conduit-passthrough,
+  body.conduit-passthrough * {
+    pointer-events: none !important;
+  }
+
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgb(var(--text-faint) / 0.28);
+    border-radius: 99px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgb(var(--text-faint) / 0.5);
+    background-clip: content-box;
+  }
+
+  :focus-visible {
+    outline: 2px solid rgb(var(--accent));
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+}
+
+@layer utilities {
+  .conduit-gradient {
+    background-image: linear-gradient(
+      160deg,
+      var(--color-deep) 0%,
+      var(--color-blue) 45%,
+      var(--color-sky) 72%,
+      var(--color-aqua) 100%
+    );
+  }
+
+  .conduit-text-gradient {
+    background-image: linear-gradient(
+      110deg,
+      var(--color-blue) 0%,
+      var(--color-sky) 50%,
+      var(--color-aqua) 100%
+    );
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  .app-shadow {
+    box-shadow: var(--shadow-app);
+  }
+
+  .hairline {
+    border-color: rgb(var(--border) / var(--border-alpha));
+  }
+}
+
+/* ── animations ─────────────────────────────────────────────── */
+
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 0.85;
+  }
+}
+
+@keyframes pulse-ring {
+  0% {
+    transform: scale(0.6);
+    opacity: 0.7;
+  }
+  100% {
+    transform: scale(2.4);
+    opacity: 0;
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: 200% 50%;
+  }
+  100% {
+    background-position: -200% 50%;
+  }
+}
+
+.animate-breathe {
+  animation: breathe 3.2s var(--ease-in-out-soft) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

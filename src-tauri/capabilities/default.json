@@ -1,0 +1,16 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Permissions for conduit's three webviews. The overlay and pill are separate windows, so they must be listed explicitly — otherwise their event.listen calls are rejected and the glow never appears.",
+  "windows": ["main", "pill", "overlay-*"],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "core:window:allow-hide",
+    "core:window:allow-show",
+    "core:window:allow-set-focus",
+    "core:window:allow-start-dragging",
+    "store:default",
+    "opener:default"
+  ]
+}

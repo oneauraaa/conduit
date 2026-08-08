@@ -1,0 +1,22 @@
+<!--
+  width/height must equal the size build-icons.mjs renders at (352). Chrome
+  honours an SVG's declared size and leaves the rest of the viewport blank, so
+  a smaller declaration would draw a tiny glyph in the corner rather than
+  scaling up. The viewBox keeps the coordinates below convenient.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 88 88" width="352" height="352">
+  <!--
+    Menu-bar glyph: three wave crests, no sky.
+    Pure black on transparent so macOS treats it as a template image and
+    inverts it for light and dark menu bars.
+
+    The drawing is inset ~14% on each side because NSStatusItem gives the image
+    the full bar height, and a glyph that runs edge to edge sits taller than
+    every system icon beside it.
+  -->
+  <g fill="none" stroke="#000000" stroke-width="8.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M14,28 C24,18 33,18 44,27 C55,36 64,36 74,25"/>
+    <path d="M14,45 C24,35 33,35 44,44 C55,53 64,53 74,42"/>
+    <path d="M14,62 C24,52 33,52 44,61 C55,70 64,70 74,59"/>
+  </g>
+</svg>

@@ -1,0 +1,93 @@
+[package]
+name = "conduit"
+version = "0.1.0"
+description = "let ai agents use your mac"
+edition = "2024"
+rust-version = "1.85"
+
+[lib]
+name = "conduit_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# `macos-private-api` must stay in lockstep with `app.macOSPrivateApi` in
+# tauri.conf.json — it's what makes the transparent windows actually transparent
+# instead of solid black.
+tauri = { version = "2.11", features = ["tray-icon", "image-png", "macos-private-api"] }
+tauri-plugin-store = "2.4"
+tauri-plugin-opener = "2"
+
+# MCP
+rmcp = { version = "3.1", features = [
+  "server",
+  "macros",
+  "transport-streamable-http-server",
+] }
+schemars = "1"
+axum = "0.8"
+tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "sync", "time", "net", "process"] }
+tokio-util = "0.7"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+thiserror = "2"
+parking_lot = "0.12"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# agent config writers
+toml_edit = "0.25"
+serde_yaml_ng = "0.10"
+jsonc-parser = { version = "0.33", features = ["serde"] }
+dirs = "6"
+
+# imaging
+image = { version = "0.25", default-features = false, features = ["png"] }
+base64 = "0.23"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = [
+  "NSApplication",
+  "NSWindow",
+  "NSScreen",
+  "NSResponder",
+  "NSRunningApplication",
+  "NSWorkspace",
+  "NSPasteboard",
+  "NSPasteboardItem",
+  "NSImage",
+  "NSImageRep",
+  "NSBitmapImageRep",
+  "NSGraphics",
+] }
+objc2-foundation = { version = "0.3", features = ["NSString", "NSArray", "NSGeometry", "NSDictionary", "NSValue", "NSURL"] }
+# objc2-core-graphics covers every CG symbol conduit needs (events, displays,
+# cursor, TCC preflight), so the older `core-graphics` crate is deliberately not
+# pulled in — two sets of bindings for the same framework invites type mismatches.
+objc2-core-graphics = { version = "0.3", features = [
+  "libc",
+  "CGEvent",
+  "CGEventTypes",
+  "CGEventSource",
+  "CGRemoteOperation",
+  "CGDirectDisplay",
+  "CGWindow",
+  "CGWindowLevel",
+  "CGError",
+] }
+objc2-core-foundation = { version = "0.3", features = ["CFCGTypes", "CFString", "CFDictionary", "CFArray", "CFNumber", "CFBase"] }
+accessibility-sys = "0.2"
+# `macos_14_0` is what gates SCScreenshotManager — the single-frame capture path.
+screencapturekit = { version = "8", features = ["macos_14_0"] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

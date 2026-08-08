@@ -1,0 +1,19 @@
+node_modules
+dist
+.DS_Store
+*.local
+
+# rust / tauri
+src-tauri/target
+src-tauri/gen
+
+# generated raster icons (regenerate with `pnpm icons`)
+assets/icon.png
+assets/tray.png
+assets/tray@2x.png
+
+# throwaway Chrome profile dirs from scripts/build-icons.mjs and shoot*.mjs.
+# Normally created under os.tmpdir(), but a stray one has landed here before.
+.icon-render/
+conduit-icon-*/
+conduit-shot-*/
