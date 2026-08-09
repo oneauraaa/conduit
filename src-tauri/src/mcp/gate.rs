@@ -43,7 +43,8 @@ where
     if state.is_aborted() {
         state.log_call(tool, ctx.agent.clone(), "blocked", Some("stopped by user".into()), None);
         return Err(McpError::invalid_request(
-            "conduit: the user stopped control. retrying will not help — they have to hand it              back from conduit's window (server tab) before any tool works again. ask them to.",
+            "conduit: the user stopped control. retrying will not help — they have to hand it \
+             back from conduit's window before any tool works again. ask them to.",
             None,
         ));
     }
