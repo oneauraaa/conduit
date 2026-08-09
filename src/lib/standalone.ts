@@ -4,10 +4,11 @@
  * Rust core. Inside the real app none of this is ever reached.
  */
 
+import { isWindows } from "./platform";
 import type {
   AgentTarget,
   ControlState,
-  PermissionState,
+  Readiness,
   ServerState,
   Settings,
   TailscaleState,
@@ -23,10 +24,27 @@ export const server: ServerState = {
   lastError: null,
 };
 
-export const permissions: PermissionState = {
-  accessibility: true,
-  screenRecording: false,
-};
+/**
+ * Which readiness card to preview. The two are structurally different, so
+ * `?platform=windows` (see `lib/platform.ts`) is the only way to see the
+ * Windows one from a Mac, or the macOS one from a PC, without a rebuild.
+ */
+export const readiness: Readiness = isWindows
+  ? {
+      platform: "windows",
+      // Not elevated, with an elevated window in front: the one combination
+      // where the card has something real to say.
+      elevated: false,
+      elevatedForeground: true,
+      dpiAware: true,
+      captureSupported: true,
+      borderlessCapture: true,
+    }
+  : {
+      platform: "macos",
+      accessibility: true,
+      screenRecording: false,
+    };
 
 export const settings: Settings = {
   defaultAccess: "full",
@@ -36,15 +54,18 @@ export const settings: Settings = {
   theme: "system",
   remoteEnabled: false,
   remoteToken: "9f2c41ab77e0d5384b1e6ca90f37de52",
+  corsEnabled: false,
+  corsOrigins: [],
 };
+
+const host = isWindows ? "desktop-7f2k1" : "mac-studio";
 
 export const tailscale: TailscaleState = {
   installed: true,
   connected: true,
-  hostname: "mac-studio.tail9c2f1.ts.net",
+  hostname: `${host}.tail9c2f1.ts.net`,
   sharing: true,
-  publicUrl:
-    "https://mac-studio.tail9c2f1.ts.net/9f2c41ab77e0d5384b1e6ca90f37de52/mcp",
+  publicUrl: `https://${host}.tail9c2f1.ts.net/9f2c41ab77e0d5384b1e6ca90f37de52/mcp`,
   error: null,
 };
 
@@ -53,6 +74,7 @@ export const control: ControlState = {
   agent: null,
   mode: "auto",
   action: null,
+  stopped: false,
 };
 
 export const catalog: ToolDef[] = [
@@ -80,12 +102,16 @@ export const catalog: ToolDef[] = [
   { name: "notify", group: "system", summary: "post a notification", risky: false },
 ];
 
+const home = isWindows ? "C:/Users/you" : "/Users/you";
+const desktopCfg = isWindows
+  ? `${home}/AppData/Roaming/Claude/claude_desktop_config.json`
+  : `${home}/Library/Application Support/Claude/claude_desktop_config.json`;
+
 export const agents: AgentTarget[] = [
-  { id: "claude-code", name: "claude code", configPath: "/Users/you/.claude.json", detected: true, installed: true, error: null, icon: null },
-  { id: "codex", name: "codex", configPath: "/Users/you/.codex/config.toml", detected: true, installed: false, error: null, icon: null },
-  { id: "gemini", name: "gemini cli", configPath: "/Users/you/.gemini/settings.json", detected: true, installed: false, error: null, icon: null },
-  { id: "opencode", name: "opencode", configPath: "/Users/you/.config/opencode/opencode.jsonc", detected: true, installed: false, error: null, icon: null },
-  { id: "claude-desktop", name: "claude desktop", configPath: "/Users/you/Library/Application Support/Claude/claude_desktop_config.json", detected: true, installed: false, error: null, icon: null },
-  { id: "hermes", name: "hermes agent", configPath: "/Users/you/.hermes/config.yaml", detected: false, installed: false, error: null, icon: null },
-  { id: "openclaw", name: "openclaw", configPath: "/Users/you/.openclaw/openclaw.json", detected: false, installed: false, error: null, icon: null },
+  { id: "claude-code", name: "claude code", configPath: `${home}/.claude.json`, detected: true, installed: true, error: null, icon: null },
+  { id: "codex", name: "codex", configPath: `${home}/.codex/config.toml`, detected: true, installed: false, error: null, icon: null },
+  { id: "opencode", name: "opencode", configPath: `${home}/.config/opencode/opencode.jsonc`, detected: true, installed: false, error: null, icon: null },
+  { id: "claude-desktop", name: "claude desktop", configPath: desktopCfg, detected: true, installed: false, error: null, icon: null },
+  { id: "hermes", name: "hermes agent", configPath: `${home}/.hermes/config.yaml`, detected: false, installed: false, error: null, icon: null },
+  { id: "openclaw", name: "openclaw", configPath: `${home}/.openclaw/openclaw.json`, detected: false, installed: false, error: null, icon: null },
 ];

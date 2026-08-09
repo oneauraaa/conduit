@@ -65,7 +65,7 @@ export function AgentsTab({ server }: { server: ServerState }) {
                 compact
                 icon={<AgentMark id={a.id} name={a.name} icon={a.icon} dimmed />}
                 title={<span className="text-[rgb(var(--text-faint))]">{a.name}</span>}
-                description={a.error ?? "not found on this mac"}
+                description={a.error ?? "not installed here"}
               />
             ))}
           </Card>

@@ -19,10 +19,18 @@ use serde::Serialize;
 
 /// Where the Tailscale CLI tends to live. The Mac App Store build hides it
 /// inside the bundle; the standalone installer and Homebrew put it on PATH.
+#[cfg(target_os = "macos")]
 const CLI_CANDIDATES: &[&str] = &[
     "/usr/local/bin/tailscale",
     "/opt/homebrew/bin/tailscale",
     "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+];
+
+/// The Windows installer is the only distribution, and it always lands here.
+#[cfg(target_os = "windows")]
+const CLI_CANDIDATES: &[&str] = &[
+    r"C:\Program Files\Tailscale\tailscale.exe",
+    r"C:\Program Files (x86)\Tailscale\tailscale.exe",
 ];
 
 #[derive(Debug, Clone, Serialize)]
@@ -63,11 +71,27 @@ pub fn cli() -> Option<PathBuf> {
         }
     }
     // Fall back to PATH, for unusual installs.
-    let out = Command::new("/usr/bin/which").arg("tailscale").output().ok()?;
+    #[cfg(target_os = "macos")]
+    let mut lookup = Command::new("/usr/bin/which");
+    #[cfg(target_os = "windows")]
+    let mut lookup = {
+        let mut c = Command::new("where.exe");
+        // No console flash: this runs on a timer while the Tailscale tab is
+        // open, and a black box blinking over the overlay is unacceptable.
+        std::os::windows::process::CommandExt::creation_flags(
+            &mut c,
+            crate::platform::shell::CREATE_NO_WINDOW,
+        );
+        c
+    };
+
+    let out = lookup.arg("tailscale").output().ok()?;
     if !out.status.success() {
         return None;
     }
-    let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    // `where.exe` prints every match, one per line; take the first.
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let path = stdout.lines().next().unwrap_or("").trim().to_string();
     (!path.is_empty()).then(|| PathBuf::from(path))
 }
 
@@ -167,21 +191,46 @@ pub fn stop_funnel(remote_port: u16) -> Result<(), String> {
 /// A fresh 32-character hex secret.
 ///
 /// Read straight from the system CSPRNG rather than pulling in an RNG crate —
-/// this is the only random value conduit needs, and `/dev/urandom` on macOS is
-/// exactly what a crate would end up calling.
+/// this is the only random value conduit needs, and each platform's primitive
+/// is exactly what a crate would end up calling.
+///
+/// This runs during `Settings::default()`, which runs on first launch before
+/// any window exists, so a failure here takes the whole app down before it can
+/// say why. It still panics rather than falling back: this key is the *entire*
+/// lock on the public sharing URL, and a predictable one that looks legitimate
+/// is far worse than not starting.
 pub fn generate_token() -> String {
+    let bytes = random_bytes();
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+#[cfg(target_os = "macos")]
+fn random_bytes() -> [u8; 16] {
     use std::io::Read;
 
     let mut bytes = [0u8; 16];
     if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
         if f.read_exact(&mut bytes).is_ok() {
-            return bytes.iter().map(|b| format!("{b:02x}")).collect();
+            return bytes;
         }
     }
-
-    // Should never happen on macOS. Better to fail loudly than to hand out a
-    // predictable key that looks legitimate.
     panic!("could not read /dev/urandom to generate a sharing key");
+}
+
+#[cfg(target_os = "windows")]
+fn random_bytes() -> [u8; 16] {
+    use windows::Win32::Security::Cryptography::{
+        BCRYPT_USE_SYSTEM_PREFERRED_RNG, BCryptGenRandom,
+    };
+
+    let mut bytes = [0u8; 16];
+    // A null algorithm handle with USE_SYSTEM_PREFERRED_RNG is the documented
+    // way to reach the system CSPRNG without opening a provider first.
+    let status = unsafe { BCryptGenRandom(None, &mut bytes, BCRYPT_USE_SYSTEM_PREFERRED_RNG) };
+    if status.is_ok() {
+        return bytes;
+    }
+    panic!("could not reach the system CSPRNG to generate a sharing key: {status:?}");
 }
 
 #[cfg(test)]

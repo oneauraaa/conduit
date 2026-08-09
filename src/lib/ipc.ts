@@ -7,7 +7,7 @@ import type {
   ControlState,
   CursorEvent,
   PendingApproval,
-  PermissionState,
+  Readiness,
   PulseEvent,
   ServerState,
   Settings,
@@ -33,9 +33,23 @@ const local: Record<string, (args: Record<string, unknown>) => unknown> = {
   set_default_access: (a) => ({ ...standalone.settings, defaultAccess: a.mode }),
   set_tools_access: (a) => ({ ...standalone.settings, toolsAccess: a.access }),
   set_tool_enabled: () => standalone.settings,
-  get_permissions: () => standalone.permissions,
+  // These two mutate the sample object rather than returning a one-off spread.
+  // The browser access panel is the one place in the UI whose state
+  // accumulates — switch it on, then add an address — and a stateless stub
+  // would silently undo the switch on the next call, which makes the panel
+  // impossible to review with `pnpm dev`.
+  set_cors_enabled: (a) => {
+    standalone.settings.corsEnabled = a.enabled as boolean;
+    return { ...standalone.settings };
+  },
+  set_cors_origins: (a) => {
+    standalone.settings.corsOrigins = a.origins as string[];
+    return { ...standalone.settings };
+  },
+  get_readiness: () => standalone.readiness,
   get_control_state: () => standalone.control,
   set_session_mode: (a) => ({ ...standalone.control, mode: a.mode }),
+  resume_control: () => ({ ...standalone.control, stopped: false }),
   list_agents: () => standalone.agents,
   get_tailscale_state: () => standalone.tailscale,
   enable_remote: () => ({ ...standalone.tailscale, sharing: true }),
@@ -78,13 +92,23 @@ export const setToolsAccess = (access: ToolsAccess) =>
 export const setToolEnabled = (tool: string, enabled: boolean) =>
   invoke<Settings>("set_tool_enabled", { tool, enabled });
 
-/* ── permissions ────────────────────────────────────────────── */
+/* ── browser access ─────────────────────────────────────────── */
 
-export const getPermissions = () => invoke<PermissionState>("get_permissions");
+export const setCorsEnabled = (enabled: boolean) =>
+  invoke<Settings>("set_cors_enabled", { enabled });
+export const setCorsOrigins = (origins: string[]) =>
+  invoke<Settings>("set_cors_origins", { origins });
+
+/* ── readiness ──────────────────────────────────────────────── */
+
+export const getReadiness = () => invoke<Readiness>("get_readiness");
 export const requestAccessibility = () => invoke<void>("request_accessibility");
 export const requestScreenRecording = () => invoke<void>("request_screen_recording");
+/** macOS only; a no-op on Windows, which withholds nothing behind a pane. */
 export const openPermissionSettings = (which: "accessibility" | "screen") =>
   invoke<void>("open_permission_settings", { which });
+/** Windows only. Tears down this process on success, so nothing after it runs. */
+export const relaunchElevated = () => invoke<void>("relaunch_elevated");
 
 /* ── control session ────────────────────────────────────────── */
 
@@ -92,6 +116,8 @@ export const getControlState = () => invoke<ControlState>("get_control_state");
 export const setSessionMode = (mode: AccessMode) =>
   invoke<ControlState>("set_session_mode", { mode });
 export const stopControl = () => invoke<void>("stop_control");
+/** Clears a latched panic stop so agents may start a new session. */
+export const resumeControl = () => invoke<ControlState>("resume_control");
 export const resolveApproval = (id: string, decision: "allow" | "session" | "deny") =>
   invoke<void>("resolve_approval", { id, decision });
 
@@ -118,7 +144,7 @@ type EventMap = {
   "server:state": ServerState;
   "server:tool-call": ToolCallEvent;
   "settings:changed": Settings;
-  "permissions:changed": PermissionState;
+  "readiness:changed": Readiness;
   "control:state": ControlState;
   "control:cursor": CursorEvent;
   "control:pulse": PulseEvent;

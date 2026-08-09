@@ -58,6 +58,18 @@ pub struct Settings {
     /// Secret path segment guarding the public endpoint. Generated on first
     /// run, never empty — the public URL is only as private as this string.
     pub remote_token: String,
+    /// Whether browser-based clients may reach the endpoint at all.
+    ///
+    /// Off by default, and deliberately so: this endpoint can drive the whole
+    /// machine and has no authentication, so allowing arbitrary web pages to
+    /// call it would be a drive-by RCE. See `mcp/cors.rs`.
+    #[serde(default)]
+    pub cors_enabled: bool,
+    /// Exact browser origins allowed when [`Settings::cors_enabled`] is on,
+    /// e.g. `http://127.0.0.1:8080`. Nothing is implied — an empty list allows
+    /// nothing even when the toggle is on.
+    #[serde(default)]
+    pub cors_origins: Vec<String>,
 }
 
 impl Default for Settings {
@@ -73,6 +85,8 @@ impl Default for Settings {
             port: DEFAULT_PORT,
             remote_enabled: false,
             remote_token: crate::tailscale::generate_token(),
+            cors_enabled: false,
+            cors_origins: Vec::new(),
         }
     }
 }
@@ -125,6 +139,11 @@ pub struct ControlState {
     pub agent: Option<String>,
     pub mode: AccessMode,
     pub action: Option<String>,
+    /// A panic stop is latched: agents are refused until the user hands control
+    /// back. Surfaced so the UI can offer that, because otherwise the only way
+    /// out is restarting the app — which is exactly the bug this field exists
+    /// to fix.
+    pub stopped: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -174,13 +193,49 @@ pub struct PulseEvent {
     pub display: usize,
 }
 
-/* ── permissions ────────────────────────────────────────────── */
+/* ── readiness ──────────────────────────────────────────────── */
 
+/// What the machine needs from the user before conduit can do its job.
+///
+/// A tagged union rather than a lowest-common-denominator struct, because the
+/// two platforms genuinely differ. macOS withholds two capabilities behind TCC
+/// grants. Windows grants everything up front but has conditions that silently
+/// change what works — reporting those as two always-`true` booleans named
+/// after macOS concepts would be a lie in a place the user goes *specifically*
+/// to find out why something isn't working.
+/// `rename_all_fields`, not `rename_all`. On an enum, `rename_all` renames the
+/// *variants* — it does nothing to the fields of a struct variant, which then
+/// serialize as `capture_supported` while the TypeScript reads
+/// `captureSupported`. The mismatch is invisible in Rust and reads as `false`
+/// in the UI, so the Server tab confidently reported broken capture and broken
+/// DPI awareness on a machine where both were fine. `elevated` hid it for a
+/// while by being a single word.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PermissionState {
-    pub accessibility: bool,
-    pub screen_recording: bool,
+#[serde(tag = "platform", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum Readiness {
+    #[serde(rename = "macos")]
+    MacOS {
+        accessibility: bool,
+        screen_recording: bool,
+    },
+    #[serde(rename = "windows")]
+    Windows {
+        /// conduit is running as administrator. Without it, UIPI silently
+        /// blocks synthetic input into — and accessibility reads of — any
+        /// window belonging to an elevated process.
+        elevated: bool,
+        /// An elevated window is in the foreground right now: the moment the
+        /// above actually bites.
+        elevated_foreground: bool,
+        /// Per-monitor DPI aware v2. Everything conduit reports on Windows is
+        /// in physical pixels, which is only coherent if this holds.
+        dpi_aware: bool,
+        /// Windows.Graphics.Capture is present (Windows 10 1903+).
+        capture_supported: bool,
+        /// The capture session can suppress the yellow border (Win 11 22000+).
+        /// When false, screenshots flash a yellow frame around the display.
+        borderless_capture: bool,
+    },
 }
 
 /* ── the app state ──────────────────────────────────────────── */
@@ -233,6 +288,7 @@ impl AppState {
                 agent: None,
                 mode,
                 action: None,
+                stopped: false,
             }),
             server_cancel: RwLock::new(None),
             remote_cancel: RwLock::new(None),
@@ -318,7 +374,10 @@ impl AppState {
     pub fn begin_control(&self, agent: Option<String>, action: &str) {
         let was_idle = self.control.read().phase == ControlPhase::Idle;
         if was_idle {
-            *self.aborted.write() = false;
+            // Note: this does *not* clear `aborted`. The gate refuses a
+            // latched stop before it ever gets here, and clearing it silently
+            // would let an agent shrug off the panic button by simply
+            // retrying. Only `resume` unlatches.
             self.session_allows.write().clear();
             let mode = self.settings().default_access;
             let next = self.update_control(|c| {
@@ -327,7 +386,7 @@ impl AppState {
                 c.mode = mode;
                 c.action = Some(action.to_string());
             });
-            crate::windows::show_control_chrome(&self.app, next);
+            crate::chrome::show_control_chrome(&self.app, next);
         } else {
             self.update_control(|c| {
                 if c.agent.is_none() {
@@ -350,10 +409,16 @@ impl AppState {
             c.action = None;
         });
         let _ = self.app.emit("control:approval", Option::<PendingApproval>::None);
-        crate::windows::hide_control_chrome(&self.app);
+        crate::chrome::hide_control_chrome(&self.app);
     }
 
     /// Panic stop: deny every in-flight approval and drop control immediately.
+    /// Drops control and latches the stop.
+    ///
+    /// The latch is deliberate: a panic stop should not be undone by whatever
+    /// the agent sends a hundred milliseconds later. [`AppState::resume`] is
+    /// the way back, and the UI offers it — before that existed, the only way
+    /// to clear this was restarting the app.
     pub fn abort(&self) {
         *self.aborted.write() = true;
         let pending: Vec<_> = self.approvals.write().drain().collect();
@@ -361,6 +426,15 @@ impl AppState {
             let _ = tx.send(Decision::Deny);
         }
         self.end_control();
+        // After `end_control`, so it survives that update and reaches the UI.
+        self.update_control(|c| c.stopped = true);
+    }
+
+    /// Hands control back, so agents may start a new session.
+    pub fn resume(&self) {
+        *self.aborted.write() = false;
+        self.session_allows.write().clear();
+        self.update_control(|c| c.stopped = false);
     }
 
     pub fn is_aborted(&self) -> bool {
@@ -434,4 +508,55 @@ pub fn now_millis() -> u64 {
 /// The tool catalog, shaped for the UI.
 pub fn catalog_for_ui() -> Vec<catalog::ToolDef> {
     catalog::CATALOG.to_vec()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The UI reads these keys by name. A mismatch is invisible on the Rust
+    /// side and surfaces as `undefined` in TypeScript, which is falsy — so the
+    /// Server tab silently renders every boolean's failure state and tells the
+    /// user their machine is broken.
+    ///
+    /// This is not hypothetical: `rename_all` on an enum renames *variants*,
+    /// not the fields of struct variants, and that shipped a card claiming
+    /// Windows.Graphics.Capture was missing on a machine where capture worked.
+    #[test]
+    fn readiness_serializes_the_keys_the_ui_reads() {
+        let win = Readiness::Windows {
+            elevated: false,
+            elevated_foreground: true,
+            dpi_aware: true,
+            capture_supported: true,
+            borderless_capture: false,
+        };
+        let json = serde_json::to_value(win).unwrap();
+
+        assert_eq!(json["platform"], "windows");
+        for key in [
+            "elevated",
+            "elevatedForeground",
+            "dpiAware",
+            "captureSupported",
+            "borderlessCapture",
+        ] {
+            assert!(
+                json.get(key).is_some(),
+                "missing `{key}` — the UI reads that name; got {json}"
+            );
+        }
+        // Values must survive too, not just the keys.
+        assert_eq!(json["dpiAware"], true);
+        assert_eq!(json["captureSupported"], true);
+        assert_eq!(json["borderlessCapture"], false);
+
+        let mac = Readiness::MacOS {
+            accessibility: true,
+            screen_recording: false,
+        };
+        let json = serde_json::to_value(mac).unwrap();
+        assert_eq!(json["platform"], "macos");
+        assert!(json.get("screenRecording").is_some(), "got {json}");
+    }
 }

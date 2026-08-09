@@ -21,7 +21,7 @@ const demo =
  *  - the AI's cursor, which is the only pointer visible during control.
  *
  * Nothing here is interactive. The window is click-through at both the Tauri
- * and NSWindow level, and `body.conduit-passthrough` kills pointer events in
+ * and native window level, and `body.conduit-passthrough` kills pointer events in
  * CSS as a third line of defence.
  */
 export function Overlay() {

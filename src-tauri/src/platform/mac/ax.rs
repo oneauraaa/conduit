@@ -15,7 +15,8 @@ use accessibility_sys::{
 };
 use objc2_app_kit::NSWorkspace;
 use objc2_core_foundation::{CFArray, CFRetained, CFString, CFType, CGPoint, CGSize};
-use serde::Serialize;
+
+use crate::platform::types::{Element, rank_matches};
 
 /// Depth cap. Real UIs nest deeply (a Finder window is ~15 levels); beyond this
 /// the payload grows faster than its usefulness.
@@ -23,21 +24,6 @@ const MAX_DEPTH: usize = 18;
 /// Hard cap on returned elements, so one pathological app can't blow the
 /// model's context window.
 const MAX_ELEMENTS: usize = 400;
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Element {
-    pub role: String,
-    /// Whatever label the control actually presents: title, value or description.
-    pub text: String,
-    pub x: f64,
-    pub y: f64,
-    pub width: f64,
-    pub height: f64,
-    /// Centre point, ready to hand straight to `click`.
-    pub center_x: f64,
-    pub center_y: f64,
-}
 
 fn attr_ptr(element: AXUIElementRef, attr: &str) -> Option<*mut c_void> {
     let key = CFString::from_str(attr);
@@ -185,28 +171,6 @@ pub fn read_screen(app_name: Option<&str>) -> Result<Vec<Element>, String> {
 }
 
 /// Elements whose text contains `query`, best match first.
-///
-/// Ranking rather than raw filtering matters: searching "Save" in a save dialog
-/// hits both "Save" and "Save As…", and the agent wants the exact one.
 pub fn find_element(query: &str, app_name: Option<&str>) -> Result<Vec<Element>, String> {
-    let needle = query.trim().to_lowercase();
-    let mut matches: Vec<(u8, Element)> = read_screen(app_name)?
-        .into_iter()
-        .filter_map(|e| {
-            let hay = e.text.to_lowercase();
-            let rank = if hay == needle {
-                0
-            } else if hay.starts_with(&needle) {
-                1
-            } else if hay.contains(&needle) {
-                2
-            } else {
-                return None;
-            };
-            Some((rank, e))
-        })
-        .collect();
-
-    matches.sort_by_key(|(rank, _)| *rank);
-    Ok(matches.into_iter().map(|(_, e)| e).take(20).collect())
+    Ok(rank_matches(query, read_screen(app_name)?))
 }

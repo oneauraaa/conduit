@@ -13,26 +13,8 @@
 
 use objc2_app_kit::NSScreen;
 use objc2_foundation::MainThreadMarker;
-use serde::Serialize;
 
-#[derive(Debug, Clone, Copy, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Display {
-    pub index: usize,
-    /// Top-left origin, Quartz space, logical points.
-    pub x: f64,
-    pub y: f64,
-    pub width: f64,
-    pub height: f64,
-    pub scale: f64,
-    pub primary: bool,
-}
-
-impl Display {
-    pub fn contains(&self, x: f64, y: f64) -> bool {
-        x >= self.x && x < self.x + self.width && y >= self.y && y < self.y + self.height
-    }
-}
+use crate::platform::types::Display;
 
 /// The full height of the primary display, which is the pivot for flipping
 /// between Cocoa and Quartz y-coordinates.
@@ -45,7 +27,14 @@ fn primary_height(mtm: MainThreadMarker) -> f64 {
 }
 
 /// Every attached display, in Quartz coordinates. Index 0 is always primary.
-pub fn displays(mtm: MainThreadMarker) -> Vec<Display> {
+///
+/// Returns empty off the main thread: `NSScreen` is not safe to read anywhere
+/// else. Callers reach this through `chrome::refresh_displays`, which already
+/// runs on main and caches the result for the tokio workers that need it.
+pub fn displays() -> Vec<Display> {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return Vec::new();
+    };
     let flip = primary_height(mtm);
 
     NSScreen::screens(mtm)
@@ -74,7 +63,10 @@ pub fn displays(mtm: MainThreadMarker) -> Vec<Display> {
 /// `visibleFrame` rather than `frame` is the whole point — it already excludes
 /// the Dock and menu bar, so this lands correctly whether the Dock is on the
 /// bottom, the left, or the right, and it follows the Dock when it auto-hides.
-pub fn pill_anchor(mtm: MainThreadMarker, pill_w: f64, pill_h: f64) -> (f64, f64) {
+pub fn pill_anchor(pill_w: f64, pill_h: f64) -> (f64, f64) {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return (0.0, 0.0);
+    };
     let Some(screen) = NSScreen::screens(mtm).iter().next() else {
         return (0.0, 0.0);
     };
@@ -91,10 +83,35 @@ pub fn pill_anchor(mtm: MainThreadMarker, pill_w: f64, pill_h: f64) -> (f64, f64
     (x, y)
 }
 
-pub fn display_at(displays: &[Display], x: f64, y: f64) -> usize {
-    displays
-        .iter()
-        .find(|d| d.contains(x, y))
-        .map(|d| d.index)
-        .unwrap_or(0)
+/* ── bridging conduit's coordinate space to Tauri's ──────────── */
+
+/// Converts a point in conduit's space to the units Tauri positions windows in.
+///
+/// macOS points are logical, so this is a straight `Logical`. The Windows
+/// backend returns `Physical` instead — the pair of them is what keeps
+/// `chrome.rs` free of `#[cfg]`.
+pub fn tauri_position(x: f64, y: f64) -> tauri::Position {
+    tauri::Position::Logical(tauri::LogicalPosition::new(x, y))
+}
+
+pub fn tauri_size(w: f64, h: f64) -> tauri::Size {
+    tauri::Size::Logical(tauri::LogicalSize::new(w, h))
+}
+
+/// Converts a value Tauri reports in physical units back to conduit's space.
+///
+/// Tauri's `outer_position`/`outer_size` are always physical; macOS coordinates
+/// are logical points, so they divide by the window's scale factor.
+pub fn physical_to_space(v: f64, scale: f64) -> f64 {
+    v / scale
+}
+
+/// The screenshot scale to use when the caller didn't ask for one.
+///
+/// Screens are physically large and models are billed per pixel, so the default
+/// means "logical points, not backing pixels" — a Retina display is captured at
+/// its point size. macOS bounds are already in points, so this is 1.0; the
+/// Windows backend divides by the monitor's DPI scale to reach the same place.
+pub fn default_capture_scale(_display: &Display) -> f64 {
+    1.0
 }

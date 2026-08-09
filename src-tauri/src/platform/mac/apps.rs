@@ -15,34 +15,9 @@ use accessibility_sys::{
 use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication, NSWorkspace};
 use objc2_core_foundation::{CFArray, CFRetained, CFString, CGPoint, CGSize};
 use objc2_core_graphics::{CGWindowListCopyWindowInfo, CGWindowListOption, kCGNullWindowID};
-use serde::Serialize;
 
 use super::cf;
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WindowInfo {
-    pub id: u32,
-    pub title: String,
-    pub app: String,
-    pub pid: i32,
-    /// Quartz coordinates, logical points.
-    pub x: f64,
-    pub y: f64,
-    pub width: f64,
-    pub height: f64,
-    /// Front-to-back ordering; 0 is frontmost.
-    pub layer_index: usize,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AppInfo {
-    pub name: String,
-    pub pid: i32,
-    pub bundle_id: Option<String>,
-    pub active: bool,
-}
+use crate::platform::types::{AppInfo, WindowInfo};
 
 /// On-screen windows, front to back. Excludes desktop elements and conduit's
 /// own overlay/pill so the agent never tries to click its own chrome.
@@ -348,4 +323,22 @@ pub fn notify(title: &str, body: &str) -> Result<(), String> {
 fn applescript_string(s: &str) -> String {
     let escaped = s.replace('\\', r"\\").replace('"', r#"\""#);
     format!("\"{escaped}\"")
+}
+
+/// What a window listing is quietly not telling the agent.
+///
+/// macOS gates `kCGWindowName` behind Screen Recording, so without that grant
+/// every title comes back empty and the list looks broken rather than
+/// restricted. An agent that can't tell those apart will retry forever.
+pub fn list_windows_hint(windows: &[WindowInfo]) -> Option<String> {
+    let titles_hidden = !windows.is_empty()
+        && windows.iter().all(|w| w.title.is_empty())
+        && !super::permissions::screen_recording_granted();
+
+    titles_hidden.then(|| {
+        "window titles are empty because conduit does not have Screen Recording \
+         permission — macOS hides them without it. Bounds and app names are still \
+         accurate. Ask the user to grant it in conduit's Server tab."
+            .to_string()
+    })
 }

@@ -1,4 +1,5 @@
 import { cn } from "@/lib/cn";
+import codexLogo from "@/assets/agents/codex.png";
 import hermesLogo from "@/assets/agents/hermes.png";
 import openclawLogo from "@/assets/agents/openclaw.svg";
 import opencodeLogo from "@/assets/agents/opencode.svg";
@@ -7,12 +8,16 @@ import opencodeLogo from "@/assets/agents/opencode.svg";
  * The agent's real icon, resolved in three steps.
  *
  * 1. `icon` — a data URL the Rust side reads from the vendor's app installed on
- *    this Mac. Preferred: always current, and nothing is redistributed.
+ *    this machine. Preferred: always current, and nothing is redistributed.
  * 2. A bundled mark, for the CLI-only agents that ship no desktop app. Taken
  *    from each project's own published icon rather than redrawn by hand.
  * 3. A tinted monogram, if a new agent is added without either.
  */
 const BUNDLED: Record<string, string> = {
+  // Codex ships as an npm CLI with no Windows executable — `codex.ps1` has no
+  // icon for the OS to hand back — so step 1 can never resolve it and the mark
+  // has to be bundled.
+  codex: codexLogo,
   hermes: hermesLogo,
   openclaw: openclawLogo,
   opencode: opencodeLogo,
@@ -24,7 +29,6 @@ const TINT: Record<string, [string, string]> = {
   hermes: ["#1B6BFF", "#35E6D5"],
   openclaw: ["#2BC9D8", "#6FF3E2"],
   opencode: ["#3D8FFF", "#8FD8FF"],
-  gemini: ["#6EC8FF", "#35E6D5"],
 };
 
 const FALLBACK: [string, string] = ["#1B6BFF", "#6EC8FF"];

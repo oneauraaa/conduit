@@ -20,10 +20,13 @@ import {
   regenerateRemoteToken,
   subscribe,
 } from "@/lib/ipc";
+import { isWindows, machineName } from "@/lib/platform";
 import { isStandalone } from "@/lib/standalone";
 import type { TailscaleState } from "@/lib/types";
 
-const DOWNLOAD = "https://tailscale.com/download/mac";
+const DOWNLOAD = isWindows
+  ? "https://tailscale.com/download/windows"
+  : "https://tailscale.com/download/mac";
 
 /**
  * Outside the Tauri shell, `?ts=missing` / `?ts=offline` / `?ts=idle` force the
@@ -90,7 +93,7 @@ export function TailscaleTab() {
     <TabShell>
       <p className="px-0.5 text-[11px] leading-relaxed text-[rgb(var(--text-dim))]">
         publishes conduit at a public https address through tailscale funnel, so
-        a web agent like gemini spark can reach this mac.
+        a web agent like gemini spark can reach {machineName}.
       </p>
 
       <Card>
@@ -101,7 +104,7 @@ export function TailscaleTab() {
           title="share on the internet"
           description={
             ts.sharing
-              ? "anyone with the address below can drive this mac"
+              ? `anyone with the address below can drive ${machineName}`
               : `off — conduit is only reachable from this machine`
           }
         >
