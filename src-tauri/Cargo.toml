@@ -18,6 +18,9 @@ tauri-build = { version = "2", features = [] }
 # instead of solid black.
 tauri = { version = "2.11", features = ["tray-icon", "image-png", "macos-private-api"] }
 tauri-plugin-store = "2.4"
+# Launch at login. Handles the Run key on Windows and a LaunchAgent on macOS,
+# so conduit does not have to know about either.
+tauri-plugin-autostart = "2"
 tauri-plugin-opener = "2"
 
 # MCP

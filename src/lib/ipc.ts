@@ -46,6 +46,14 @@ const local: Record<string, (args: Record<string, unknown>) => unknown> = {
     standalone.settings.corsOrigins = a.origins as string[];
     return { ...standalone.settings };
   },
+  set_start_on_login: (a) => {
+    standalone.settings.startOnLogin = a.enabled as boolean;
+    return { ...standalone.settings };
+  },
+  set_start_hidden: (a) => {
+    standalone.settings.startHidden = a.hidden as boolean;
+    return { ...standalone.settings };
+  },
   get_readiness: () => standalone.readiness,
   get_control_state: () => standalone.control,
   set_session_mode: (a) => ({ ...standalone.control, mode: a.mode }),
@@ -98,6 +106,14 @@ export const setCorsEnabled = (enabled: boolean) =>
   invoke<Settings>("set_cors_enabled", { enabled });
 export const setCorsOrigins = (origins: string[]) =>
   invoke<Settings>("set_cors_origins", { origins });
+
+/* ── startup ────────────────────────────────────────────────── */
+
+/** Rejects if the OS refused the login entry, so the switch can't lie. */
+export const setStartOnLogin = (enabled: boolean) =>
+  invoke<Settings>("set_start_on_login", { enabled });
+export const setStartHidden = (hidden: boolean) =>
+  invoke<Settings>("set_start_hidden", { hidden });
 
 /* ── readiness ──────────────────────────────────────────────── */
 

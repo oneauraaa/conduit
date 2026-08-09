@@ -46,6 +46,10 @@ export interface Settings {
   corsEnabled: boolean;
   /** Exact origins allowed when `corsEnabled`. Empty allows nothing. */
   corsOrigins: string[];
+  /** Launch conduit when the user logs in. */
+  startOnLogin: boolean;
+  /** When launched at login, go to the tray instead of showing the window. */
+  startHidden: boolean;
 }
 
 export interface TailscaleState {

@@ -196,7 +196,7 @@ fn app_paths_lookup(exe: &str) -> Option<PathBuf> {
             None
         };
 
-        unsafe { RegCloseKey(key).ok() };
+        let _ = unsafe { RegCloseKey(key) };
 
         if let Some(v) = value {
             // These are routinely REG_EXPAND_SZ — `%SystemRoot%\system32\...`.

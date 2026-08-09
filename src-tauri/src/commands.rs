@@ -103,6 +103,41 @@ pub fn set_cors_origins(state: State<'_, Shared>, origins: Vec<String>) -> Setti
     state.update_settings(|s| s.cors_origins = cleaned)
 }
 
+/* ── startup ── */
+
+/// Registers or removes conduit's launch-at-login entry.
+///
+/// The setting and the OS entry are kept in step here rather than only at
+/// startup, so a failure to write the registry key or the LaunchAgent surfaces
+/// as an error the user sees instead of a switch that lies.
+#[tauri::command]
+pub fn set_start_on_login(
+    app: AppHandle<Wry>,
+    state: State<'_, Shared>,
+    enabled: bool,
+) -> Result<Settings, String> {
+    apply_autostart(&app, enabled)?;
+    Ok(state.update_settings(|s| s.start_on_login = enabled))
+}
+
+#[tauri::command]
+pub fn set_start_hidden(state: State<'_, Shared>, hidden: bool) -> Settings {
+    state.update_settings(|s| s.start_hidden = hidden)
+}
+
+/// Points the OS's login entry at the current state of the setting.
+pub fn apply_autostart(app: &AppHandle<Wry>, enabled: bool) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+
+    let manager = app.autolaunch();
+    let result = if enabled {
+        manager.enable()
+    } else {
+        manager.disable()
+    };
+    result.map_err(|e| format!("could not change the launch-at-login entry: {e}"))
+}
+
 /* ── readiness ── */
 
 /// Every command below stays registered on both platforms, with the bodies

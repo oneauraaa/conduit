@@ -15,6 +15,18 @@ use tauri::{Manager, WindowEvent};
 
 use state::{AppState, Shared};
 
+/// The argument conduit's login entry passes to itself.
+///
+/// It is how the app tells "the system started me" from "a person started me".
+/// A manual launch never carries it, so double-clicking conduit always shows a
+/// window even when `start_hidden` is on — a launch that appears to do nothing
+/// is worse than a window you have to dismiss.
+const HIDDEN_FLAG: &str = "--hidden";
+
+fn launched_at_login() -> bool {
+    std::env::args().any(|arg| arg == HIDDEN_FLAG)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Without a subscriber, every tracing::warn! in the app goes nowhere — which
@@ -43,6 +55,13 @@ pub fn run() {
     builder
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_opener::init())
+        // `--hidden` is how the login entry tells the app it was started by the
+        // system rather than by a person. A manual launch never carries it, so
+        // double-clicking conduit always shows the window.
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec![HIDDEN_FLAG]),
+        ))
         .invoke_handler(tauri::generate_handler![
             commands::get_server_state,
             commands::start_server,
@@ -56,6 +75,8 @@ pub fn run() {
             commands::set_tool_enabled,
             commands::set_cors_enabled,
             commands::set_cors_origins,
+            commands::set_start_on_login,
+            commands::set_start_hidden,
             commands::get_readiness,
             commands::request_accessibility,
             commands::request_screen_recording,
@@ -151,7 +172,20 @@ pub fn run() {
                 }
             });
 
-            if let Some(main) = app.get_webview_window("main") {
+            // Re-assert the login entry. The setting is conduit's record of
+            // what the user asked for; the registry key or LaunchAgent is the
+            // OS's, and something else may have removed it since.
+            if shared.settings().start_on_login {
+                if let Err(e) = commands::apply_autostart(&handle, true) {
+                    tracing::warn!("{e}");
+                }
+            }
+
+            // The server is already starting above, whether or not a window is
+            // shown — starting in the tray must not mean starting inert.
+            if shared.settings().start_hidden && launched_at_login() {
+                tracing::info!("started at login; staying in the tray");
+            } else if let Some(main) = app.get_webview_window("main") {
                 let _ = main.show();
                 let _ = main.set_focus();
             }

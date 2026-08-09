@@ -233,6 +233,9 @@ fn describe(element: &IUIAutomationElement) -> Option<Element> {
 /// prompt or a heuristic written against one platform reads the same on the
 /// other. An agent looking for `"button"` should not have to know it is talking
 /// to UIA rather than the accessibility API.
+// The UIA control-type ids are Windows SDK constants and keep their SDK
+// spelling; renaming them to satisfy the lint would make them harder to look up.
+#[allow(non_upper_case_globals)]
 fn role_name(control_type: UIA_CONTROLTYPE_ID) -> &'static str {
     use windows::Win32::UI::Accessibility::*;
 

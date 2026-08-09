@@ -56,6 +56,8 @@ export const settings: Settings = {
   remoteToken: "9f2c41ab77e0d5384b1e6ca90f37de52",
   corsEnabled: false,
   corsOrigins: [],
+  startOnLogin: false,
+  startHidden: false,
 };
 
 const host = isWindows ? "desktop-7f2k1" : "mac-studio";

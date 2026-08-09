@@ -1,0 +1,145 @@
+name: build
+
+# Every push and PR gets a real build on both platforms — conduit is one
+# codebase with two backends, and the whole point of `platform/contract.rs` is
+# that a change which compiles on one must compile on the other. CI is where
+# that gets caught, since most work happens on a single machine.
+#
+# Pushing a `v*` tag additionally cuts a release: the same zips, attached to a
+# GitHub Release named after the version, with the commits since the previous
+# tag as its description.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One platform failing should not hide the other's result.
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: windows
+            # Not set for Windows: the default host target is what we ship.
+            args: ""
+          - os: macos-latest
+            label: macos
+            # One .app that runs on both Apple Silicon and Intel, rather than
+            # asking people which Mac they have.
+            args: "--target universal-apple-darwin"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Add the macOS targets
+        # The universal build needs both halves present. Done as its own step
+        # rather than an input that would be an empty string on Windows.
+        if: matrix.os == 'macos-latest'
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.label }}
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Typecheck and build the frontend
+        run: pnpm build
+
+      - name: Test
+        working-directory: src-tauri
+        run: cargo test --lib
+
+      - name: Package
+        run: pnpm run package ${{ matrix.args }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: conduit-${{ matrix.label }}
+          path: dist-release/*.zip
+          if-no-files-found: error
+
+  release:
+    name: release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The changelog below walks back to the previous tag, which needs the
+          # history a shallow clone would omit.
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Build the changelog
+        id: changelog
+        shell: bash
+        run: |
+          current="${GITHUB_REF_NAME}"
+          previous="$(git describe --tags --abbrev=0 "${current}^" 2>/dev/null || true)"
+
+          if [ -z "$previous" ]; then
+            echo "first tag — listing every commit"
+            range=""
+            heading="Everything so far"
+          else
+            range="${previous}..${current}"
+            heading="Changes since ${previous}"
+          fi
+
+          {
+            echo "## ${heading}"
+            echo
+            git log --no-merges --pretty=format:'- %s (%h)' ${range}
+            echo
+            echo
+            echo "### Downloads"
+            echo
+            echo "- **Windows** — unzip and run \`conduit.exe\`. Needs the WebView2 runtime, which Windows 11 already has."
+            echo "- **macOS** — unzip and move \`conduit.app\` to Applications. Grant Accessibility and Screen Recording when asked."
+            echo
+            echo "Neither build is code-signed, so the first launch needs a click past SmartScreen or Gatekeeper."
+          } > notes.md
+
+          cat notes.md
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          # The release is named after the version, per the tag.
+          name: ${{ github.ref_name }}
+          body_path: notes.md
+          files: artifacts/*.zip
+          fail_on_unmatched_files: true

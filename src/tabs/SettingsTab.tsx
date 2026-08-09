@@ -1,9 +1,24 @@
 import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { Globe, Plus, ShieldAlert, Trash2, TriangleAlert } from "lucide-react";
+import {
+  Globe,
+  PanelBottom,
+  Plus,
+  Power,
+  ShieldAlert,
+  Trash2,
+  TriangleAlert,
+} from "lucide-react";
 import { Button, Card, Row, SectionLabel, TabShell } from "@/components/Panel";
 import { Switch } from "@/components/Switch";
-import { getSettings, setCorsEnabled, setCorsOrigins, subscribe } from "@/lib/ipc";
+import {
+  getSettings,
+  setCorsEnabled,
+  setCorsOrigins,
+  setStartHidden,
+  setStartOnLogin,
+  subscribe,
+} from "@/lib/ipc";
 import type { Settings } from "@/lib/types";
 import { cn } from "@/lib/cn";
 
@@ -42,6 +57,7 @@ export function SettingsTab() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [startError, setStartError] = useState<string | null>(null);
 
   useEffect(() => {
     void getSettings().then(setSettings).catch(() => {});
@@ -50,6 +66,23 @@ export function SettingsTab() {
 
   const origins = useMemo(() => settings?.corsOrigins ?? [], [settings]);
   const enabled = settings?.corsEnabled ?? false;
+  const startOnLogin = settings?.startOnLogin ?? false;
+  const startHidden = settings?.startHidden ?? false;
+
+  async function toggleStartOnLogin(next: boolean) {
+    try {
+      setSettings(await setStartOnLogin(next));
+      setStartError(null);
+    } catch (e) {
+      // The OS can refuse to write the login entry. Say so rather than leaving
+      // a switch that flipped but changed nothing.
+      setStartError(String(e));
+    }
+  }
+
+  async function toggleStartHidden(next: boolean) {
+    setSettings(await setStartHidden(next));
+  }
 
   async function toggle(next: boolean) {
     setSettings(await setCorsEnabled(next));
@@ -73,6 +106,58 @@ export function SettingsTab() {
 
   return (
     <TabShell>
+      <div className="flex flex-col gap-2">
+        <SectionLabel>startup</SectionLabel>
+
+        <Card>
+          <Row
+            icon={
+              <span className={startOnLogin ? "text-[var(--color-aqua)]" : "text-[rgb(var(--text-faint))]"}>
+                <Power size={15} />
+              </span>
+            }
+            title="start conduit at login"
+            description={
+              startError ??
+              "the server comes up with the app, so the endpoint is there without remembering to start it"
+            }
+            className={startOnLogin ? "border-b hairline" : undefined}
+          >
+            <Switch
+              checked={startOnLogin}
+              onChange={(next) => void toggleStartOnLogin(next)}
+              label="start conduit at login"
+            />
+          </Row>
+
+          {/* Only offered once the first is on: on its own it would describe a
+              launch that never happens. */}
+          <AnimatePresence initial={false}>
+            {startOnLogin && (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: "auto" }}
+                exit={{ opacity: 0, height: 0 }}
+                transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+                className="overflow-hidden"
+              >
+                <Row
+                  icon={<PanelBottom size={15} className="text-[rgb(var(--text-faint))]" />}
+                  title="start in the tray"
+                  description="no window at login — opening conduit yourself still shows it"
+                >
+                  <Switch
+                    checked={startHidden}
+                    onChange={(next) => void toggleStartHidden(next)}
+                    label="start in the tray"
+                  />
+                </Row>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </Card>
+      </div>
+
       {/* One setting, not two. The allowlist is the *body* of "allow browser
           clients" rather than a section of its own — giving it its own heading
           read as a second, independent option, and left a stranded list of

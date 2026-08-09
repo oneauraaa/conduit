@@ -17,3 +17,6 @@ assets/tray@2x.png
 .icon-render/
 conduit-icon-*/
 conduit-shot-*/
+
+# release zips from `pnpm package`
+/dist-release

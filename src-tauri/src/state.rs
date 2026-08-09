@@ -70,6 +70,18 @@ pub struct Settings {
     /// nothing even when the toggle is on.
     #[serde(default)]
     pub cors_origins: Vec<String>,
+    /// Launch conduit when the user logs in.
+    ///
+    /// The server comes up with the app either way, so this is really "have the
+    /// endpoint available without remembering to start it".
+    #[serde(default)]
+    pub start_on_login: bool,
+    /// When launched at login, go straight to the tray instead of showing the
+    /// window. Only meaningful alongside [`Settings::start_on_login`] — a
+    /// manual launch always shows the window, because a double-click that
+    /// appears to do nothing is worse than a window you have to dismiss.
+    #[serde(default)]
+    pub start_hidden: bool,
 }
 
 impl Default for Settings {
@@ -87,6 +99,8 @@ impl Default for Settings {
             remote_token: crate::tailscale::generate_token(),
             cors_enabled: false,
             cors_origins: Vec::new(),
+            start_on_login: false,
+            start_hidden: false,
         }
     }
 }
