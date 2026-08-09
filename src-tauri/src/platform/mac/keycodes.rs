@@ -7,6 +7,8 @@
 
 use objc2_core_graphics::CGEventFlags;
 
+use crate::platform::types::Modifiers;
+
 pub fn lookup(name: &str) -> Option<u16> {
     let n = name.trim().to_ascii_lowercase();
     Some(match n.as_str() {
@@ -58,17 +60,31 @@ pub fn lookup(name: &str) -> Option<u16> {
     })
 }
 
-pub fn modifier_flags(modifiers: &[String]) -> Result<CGEventFlags, String> {
+/// Packs modifiers into the flags field macOS carries on the event itself.
+///
+/// Not part of the cross-platform contract: Windows has no such field and must
+/// press and release real modifier keys instead, so there is no honest shared
+/// return type. Only the *names* are shared, via [`Modifiers::parse`].
+pub(super) fn modifier_flags(modifiers: &[String]) -> Result<CGEventFlags, String> {
+    let m = Modifiers::parse(modifiers)?;
     let mut flags = CGEventFlags::empty();
-    for m in modifiers {
-        flags |= match m.trim().to_ascii_lowercase().as_str() {
-            "cmd" | "command" | "meta" | "super" => CGEventFlags::MaskCommand,
-            "shift" => CGEventFlags::MaskShift,
-            "alt" | "option" | "opt" => CGEventFlags::MaskAlternate,
-            "ctrl" | "control" => CGEventFlags::MaskControl,
-            "fn" | "function" => CGEventFlags::MaskSecondaryFn,
-            other => return Err(format!("unknown modifier: {other}")),
-        };
+
+    // Command is both the shortcut modifier and the logo key on macOS, so the
+    // two collapse here. They are Ctrl and Win respectively on Windows.
+    if m.cmd || m.win {
+        flags |= CGEventFlags::MaskCommand;
+    }
+    if m.shift {
+        flags |= CGEventFlags::MaskShift;
+    }
+    if m.alt {
+        flags |= CGEventFlags::MaskAlternate;
+    }
+    if m.ctrl {
+        flags |= CGEventFlags::MaskControl;
+    }
+    if m.func {
+        flags |= CGEventFlags::MaskSecondaryFn;
     }
     Ok(flags)
 }

@@ -12,6 +12,7 @@ use rmcp::transport::streamable_http_server::{
 };
 use tokio_util::sync::CancellationToken;
 
+use crate::mcp::cors;
 use crate::mcp::tools::Conduit;
 use crate::state::{ServerStatus, Shared, now_millis};
 
@@ -59,7 +60,16 @@ pub async fn start(state: Shared) {
         StreamableHttpServerConfig::default().with_cancellation_token(cancel.child_token()),
     );
 
-    let router = axum::Router::new().nest_service("/mcp", service);
+    // Every request passes the origin guard first. Native clients send no
+    // Origin and are unaffected; browser clients are refused unless the user
+    // has allowed them in Settings. See `mcp/cors.rs` for why this is not a
+    // permissive CORS layer.
+    let router = axum::Router::new()
+        .nest_service("/mcp", service)
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            cors::guard,
+        ));
 
     state.update_server(|s| {
         s.status = ServerStatus::Running;
@@ -138,7 +148,15 @@ pub async fn start_remote(state: Shared) -> Result<(), String> {
         StreamableHttpServerConfig::default().with_cancellation_token(cancel.child_token()),
     );
 
-    let router = axum::Router::new().nest_service(&format!("/{token}/mcp"), service);
+    // The same policy guards the shared listener. The secret path is what
+    // makes this endpoint private; the origin allowlist is what keeps a web
+    // page from using it on the user's behalf.
+    let router = axum::Router::new()
+        .nest_service(&format!("/{token}/mcp"), service)
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            cors::guard,
+        ));
 
     tauri::async_runtime::spawn(async move {
         let shutdown = cancel.clone();

@@ -9,9 +9,8 @@
 //! there is one cursor and it belongs to the AI; mechanically it's the pointer
 //! macOS already trusts.
 //!
-//! [`InputBackend`] exists so a genuinely independent virtual cursor
-//! (CGEventPostToPid, no pointer movement at all) can be added later without
-//! touching a single tool handler.
+//! The easing curve lives in `platform::tween` rather than here, so the AI
+//! cursor moves with the same weight on every platform.
 
 use std::time::Duration;
 
@@ -23,17 +22,8 @@ use objc2_core_graphics::{
 use objc2_core_foundation::CGPoint;
 
 use super::keycodes;
-
-/// Interval between tween steps. ~125 Hz: smooth to the eye, and comfortably
-/// under the rate at which CGEvent posting starts to drop events.
-const STEP: Duration = Duration::from_millis(8);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Button {
-    Left,
-    Right,
-    Middle,
-}
+use crate::platform::tween::{self, STEP};
+use crate::platform::types::Button;
 
 impl Button {
     fn cg(self) -> CGMouseButton {
@@ -102,40 +92,8 @@ fn mouse_event(kind: CGEventType, x: f64, y: f64, button: Button) {
 /// can draw the trail in lockstep with the real pointer.
 pub async fn glide(to_x: f64, to_y: f64, mut on_step: impl FnMut(f64, f64)) {
     let (from_x, from_y) = cursor_position();
-    let dx = to_x - from_x;
-    let dy = to_y - from_y;
-    let distance = (dx * dx + dy * dy).sqrt();
 
-    if distance < 1.0 {
-        warp(to_x, to_y);
-        mouse_event(CGEventType::MouseMoved, to_x, to_y, Button::Left);
-        on_step(to_x, to_y);
-        return;
-    }
-
-    // Longer trips take longer, but sub-linearly — 40px and 2000px should not
-    // differ by a factor of 50.
-    let duration_ms = (160.0 + distance.sqrt() * 22.0).clamp(180.0, 620.0);
-    let steps = ((duration_ms / STEP.as_millis() as f64).round() as usize).max(2);
-
-    // Perpendicular bow, capped so long journeys don't sail off-screen.
-    let bow = (distance * 0.06).min(38.0);
-    let (nx, ny) = (-dy / distance, dx / distance);
-
-    for i in 1..=steps {
-        let t = i as f64 / steps as f64;
-        // easeInOutCubic
-        let e = if t < 0.5 {
-            4.0 * t * t * t
-        } else {
-            1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
-        };
-        // Arc peaks mid-flight and returns to zero at both ends.
-        let arc = (e * std::f64::consts::PI).sin() * bow;
-
-        let x = from_x + dx * e + nx * arc;
-        let y = from_y + dy * e + ny * arc;
-
+    for (x, y) in tween::path(from_x, from_y, to_x, to_y) {
         warp(x, y);
         mouse_event(CGEventType::MouseMoved, x, y, Button::Left);
         on_step(x, y);
@@ -280,4 +238,15 @@ pub fn hide_system_cursor() {
 
 pub fn show_system_cursor() {
     CGDisplayShowCursor(CGMainDisplayID());
+}
+
+/// Why the last synthetic input did not reach its target, if it didn't.
+///
+/// Always `None`: Quartz has no counterpart to Windows' UIPI, and a CGEvent
+/// posted to the HID tap either reaches the session or fails at creation, which
+/// the callers above already handle. The function exists so the tool layer can
+/// check uniformly on both platforms — see the Windows twin for what it guards
+/// against.
+pub fn blocked_reason() -> Option<String> {
+    None
 }

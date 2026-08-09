@@ -6,6 +6,7 @@ import { ServerTab } from "@/tabs/ServerTab";
 import { ToolsTab } from "@/tabs/ToolsTab";
 import { AgentsTab } from "@/tabs/AgentsTab";
 import { TailscaleTab } from "@/tabs/TailscaleTab";
+import { SettingsTab } from "@/tabs/SettingsTab";
 import { getServerState, subscribe } from "@/lib/ipc";
 import { isStandalone } from "@/lib/standalone";
 import type { ServerState } from "@/lib/types";
@@ -25,7 +26,9 @@ const INITIAL_SERVER: ServerState = {
 function initialTab(): Tab {
   if (!isStandalone) return "server";
   const t = new URLSearchParams(window.location.search).get("tab");
-  return t === "tools" || t === "agents" || t === "tailscale" ? t : "server";
+  return t === "tools" || t === "agents" || t === "tailscale" || t === "settings"
+    ? t
+    : "server";
 }
 
 export default function App() {
@@ -56,6 +59,7 @@ export default function App() {
             {tab === "tools" && <ToolsTab />}
             {tab === "agents" && <AgentsTab server={server} />}
             {tab === "tailscale" && <TailscaleTab />}
+            {tab === "settings" && <SettingsTab />}
           </motion.div>
         </AnimatePresence>
       </main>

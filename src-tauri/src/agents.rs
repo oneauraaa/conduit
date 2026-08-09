@@ -41,21 +41,69 @@ enum Format {
     YamlMcpServers,
 }
 
+/// One agent product's config location and identity.
+///
+/// Two columns are per-platform rather than duplicating the whole table. Most
+/// of these agents are CLIs that put their config in the same dot-directory on
+/// every OS, so only the odd one out — Claude Desktop, a GUI app following
+/// platform convention — needs the override.
 struct Spec {
     id: &'static str,
     name: &'static str,
-    /// Relative to $HOME.
+    /// Relative to the home directory.
     path: &'static str,
+    /// Where Windows puts it instead, still relative to the user profile.
+    /// `%APPDATA%` is `AppData/Roaming` under the profile, so the same
+    /// `home().join(..)` mechanism reaches it. `None` means [`Spec::path`] is
+    /// correct on both.
+    win_path: Option<&'static str>,
     format: Format,
     /// If present, the agent counts as installed when this directory exists,
     /// even before its config file has been created.
     marker_dir: Option<&'static str>,
-    /// Bundle id of the desktop app whose icon represents this agent.
+    /// The Windows counterpart of [`Spec::marker_dir`], same rule as above.
+    win_marker_dir: Option<&'static str>,
+    /// Bundle id of the macOS app whose icon represents this agent.
     ///
     /// Several of these are CLIs with no bundle of their own, so they borrow
     /// the icon of the same vendor's desktop app — same brand, and it's the
     /// mark a user actually recognises. `None` falls back to a monogram.
     icon_bundle: Option<&'static str>,
+    /// The executable name Windows knows the same vendor app by, looked up
+    /// through the registry's App Paths and the Start Menu. Windows has no
+    /// bundle identifiers, so this is the nearest stable handle.
+    icon_exe: Option<&'static str>,
+}
+
+impl Spec {
+    /// Config path for the platform this build targets.
+    fn rel_path(&self) -> &'static str {
+        #[cfg(target_os = "windows")]
+        {
+            return self.win_path.unwrap_or(self.path);
+        }
+        #[cfg(not(target_os = "windows"))]
+        self.path
+    }
+
+    fn rel_marker_dir(&self) -> Option<&'static str> {
+        #[cfg(target_os = "windows")]
+        {
+            return self.win_marker_dir.or(self.marker_dir);
+        }
+        #[cfg(not(target_os = "windows"))]
+        self.marker_dir
+    }
+
+    /// The handle `platform::appicon` resolves into a real icon.
+    fn icon_key(&self) -> Option<&'static str> {
+        #[cfg(target_os = "windows")]
+        {
+            return self.icon_exe;
+        }
+        #[cfg(not(target_os = "windows"))]
+        self.icon_bundle
+    }
 }
 
 const SPECS: &[Spec] = &[
@@ -63,57 +111,77 @@ const SPECS: &[Spec] = &[
         id: "claude-code",
         name: "claude code",
         path: ".claude.json",
+        win_path: None,
         format: Format::JsonMcpServers,
         marker_dir: Some(".claude"),
+        win_marker_dir: None,
         icon_bundle: Some("com.anthropic.claudefordesktop"),
+        icon_exe: Some("claude.exe"),
     },
     Spec {
         id: "codex",
         name: "codex",
         path: ".codex/config.toml",
+        win_path: None,
         format: Format::TomlMcpServers,
         marker_dir: Some(".codex"),
+        win_marker_dir: None,
         icon_bundle: Some("com.openai.codex"),
+        // None on purpose. npm installs codex as a `.ps1` shim, and any
+        // `codex.exe` that turns up on PATH is a generic launcher wearing
+        // Node's icon — worse than the real mark bundled in
+        // `assets/agents/codex.png`, which the UI falls back to.
+        icon_exe: None,
     },
     Spec {
         id: "hermes",
         name: "hermes agent",
         path: ".hermes/config.yaml",
+        // Hermes keeps the same `config.yaml`, in the same shape, under
+        // `%LOCALAPPDATA%` rather than a home dot-directory. Only the location
+        // differs — which is the entire reason these columns exist.
+        win_path: Some("AppData/Local/hermes/config.yaml"),
         format: Format::YamlMcpServers,
         marker_dir: Some(".hermes"),
+        win_marker_dir: Some("AppData/Local/hermes"),
         icon_bundle: None,
+        // Left None even though `hermes.exe` is on PATH: it is a Python venv
+        // shim wearing a generic interpreter icon, and the bundled mark in
+        // `assets/agents/hermes.png` is the real one.
+        icon_exe: None,
     },
     Spec {
         id: "openclaw",
         name: "openclaw",
         path: ".openclaw/openclaw.json",
+        win_path: None,
         format: Format::JsonMcpServers,
         marker_dir: Some(".openclaw"),
+        win_marker_dir: None,
         icon_bundle: None,
-    },
-    Spec {
-        id: "gemini",
-        name: "gemini cli",
-        path: ".gemini/settings.json",
-        format: Format::JsonMcpServers,
-        marker_dir: Some(".gemini"),
-        icon_bundle: Some("com.google.GeminiMacOS"),
+        icon_exe: None,
     },
     Spec {
         id: "opencode",
         name: "opencode",
         path: ".config/opencode/opencode.jsonc",
+        win_path: None,
         format: Format::JsoncMcp,
         marker_dir: Some(".config/opencode"),
+        win_marker_dir: None,
         icon_bundle: None,
+        icon_exe: None,
     },
     Spec {
         id: "claude-desktop",
         name: "claude desktop",
         path: "Library/Application Support/Claude/claude_desktop_config.json",
+        win_path: Some("AppData/Roaming/Claude/claude_desktop_config.json"),
         format: Format::JsonMcpServers,
         marker_dir: Some("Library/Application Support/Claude"),
+        win_marker_dir: Some("AppData/Roaming/Claude"),
         icon_bundle: Some("com.anthropic.claudefordesktop"),
+        icon_exe: Some("claude.exe"),
     },
 ];
 
@@ -130,9 +198,9 @@ fn home() -> PathBuf {
     dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"))
 }
 
-/// Every bundle id the Agents tab will ask for an icon of.
-pub fn icon_bundle_ids() -> Vec<&'static str> {
-    let mut ids: Vec<&'static str> = SPECS.iter().filter_map(|s| s.icon_bundle).collect();
+/// Every app handle the Agents tab will ask for an icon of.
+pub fn icon_keys() -> Vec<&'static str> {
+    let mut ids: Vec<&'static str> = SPECS.iter().filter_map(|s| s.icon_key()).collect();
     // claude code and claude desktop share one app; dedupe so a warm-up does
     // the expensive extraction once rather than twice.
     ids.sort_unstable();
@@ -153,9 +221,9 @@ pub fn list(_port: u16) -> Vec<AgentTarget> {
     SPECS
         .iter()
         .map(|s| {
-            let path = home().join(s.path);
+            let path = home().join(s.rel_path());
             let detected = path.exists()
-                || s.marker_dir
+                || s.rel_marker_dir()
                     .map(|d| home().join(d).exists())
                     .unwrap_or(false);
 
@@ -249,7 +317,7 @@ fn write_atomic(path: &Path, contents: &str) -> Result<(), String> {
 
 pub fn install(id: &str, port: u16) -> Result<AgentTarget, String> {
     let s = spec(id).ok_or_else(|| format!("unknown agent: {id}"))?;
-    let path = home().join(s.path);
+    let path = home().join(s.rel_path());
     let url = endpoint(port);
 
     backup(&path)?;
@@ -268,7 +336,7 @@ pub fn install(id: &str, port: u16) -> Result<AgentTarget, String> {
 
 pub fn uninstall(id: &str, _port: u16) -> Result<AgentTarget, String> {
     let s = spec(id).ok_or_else(|| format!("unknown agent: {id}"))?;
-    let path = home().join(s.path);
+    let path = home().join(s.rel_path());
 
     if !path.exists() {
         return Ok(single(s));
@@ -288,7 +356,7 @@ pub fn uninstall(id: &str, _port: u16) -> Result<AgentTarget, String> {
 }
 
 fn single(s: &'static Spec) -> AgentTarget {
-    let path = home().join(s.path);
+    let path = home().join(s.rel_path());
     let (installed, error) = match is_installed(&path, s.format) {
         Ok(v) => (v, None),
         Err(e) => (false, Some(e)),
@@ -304,20 +372,11 @@ fn single(s: &'static Spec) -> AgentTarget {
     }
 }
 
-/// The vendor app's icon, if that app is on this Mac.
+/// The vendor app's icon, if that app is installed on this machine.
 fn icon_for(s: &Spec) -> Option<String> {
-    #[cfg(target_os = "macos")]
-    {
-        // 64pt: the row draws it at 28, and 2x covers Retina with headroom.
-        return s
-            .icon_bundle
-            .and_then(|id| crate::mac::appicon::icon_data_url(id, 64.0));
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = s;
-        None
-    }
+    // 64pt: the row draws it at 28, and 2x covers Retina with headroom.
+    s.icon_key()
+        .and_then(|key| crate::platform::appicon::icon_data_url(key, 64.0))
 }
 
 /* ── format-specific edits ──────────────────────────────────── */
@@ -445,6 +504,59 @@ mod tests {
     use super::*;
 
     const URL: &str = "http://127.0.0.1:6767/mcp";
+
+    /// Every agent must resolve to a path that is plausible for the platform
+    /// being built, because a wrong one fails *silently*: detection just says
+    /// "not installed here" for software the user is looking at.
+    ///
+    /// Hermes is the specific case. It keeps the same `config.yaml` in the same
+    /// shape on both platforms, but under `%LOCALAPPDATA%` on Windows instead
+    /// of a home dot-directory, so the shared path detected nothing.
+    #[test]
+    fn every_spec_resolves_to_a_path_for_this_platform() {
+        for s in SPECS {
+            let path = s.rel_path();
+            assert!(!path.is_empty(), "{} has no path", s.id);
+
+            // A macOS-only location can never be right on Windows, and vice
+            // versa — either means the per-platform column was forgotten.
+            if cfg!(target_os = "windows") {
+                assert!(
+                    !path.starts_with("Library/"),
+                    "{} still points at the macOS Library path on Windows: {path}",
+                    s.id
+                );
+            } else {
+                assert!(
+                    !path.starts_with("AppData/"),
+                    "{} points at a Windows AppData path on macOS: {path}",
+                    s.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hermes_and_claude_desktop_use_platform_specific_paths() {
+        let hermes = spec("hermes").expect("hermes spec");
+        let desktop = spec("claude-desktop").expect("claude-desktop spec");
+
+        if cfg!(target_os = "windows") {
+            assert_eq!(hermes.rel_path(), "AppData/Local/hermes/config.yaml");
+            assert_eq!(hermes.rel_marker_dir(), Some("AppData/Local/hermes"));
+            assert_eq!(
+                desktop.rel_path(),
+                "AppData/Roaming/Claude/claude_desktop_config.json"
+            );
+        } else {
+            assert_eq!(hermes.rel_path(), ".hermes/config.yaml");
+            assert_eq!(hermes.rel_marker_dir(), Some(".hermes"));
+            assert_eq!(
+                desktop.rel_path(),
+                "Library/Application Support/Claude/claude_desktop_config.json"
+            );
+        }
+    }
 
     /// The one that matters most: Codex's config is large, ordered and
     /// hand-maintained. A naive parse-and-reserialize would strip comments and

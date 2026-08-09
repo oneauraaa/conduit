@@ -38,6 +38,14 @@ export interface Settings {
   remoteEnabled: boolean;
   /** Secret path segment guarding the public endpoint. */
   remoteToken: string;
+  /**
+   * Whether browser-based clients may reach the endpoint at all. Off by
+   * default — this endpoint can drive the whole machine and has no
+   * authentication, so an open door here is a drive-by RCE.
+   */
+  corsEnabled: boolean;
+  /** Exact origins allowed when `corsEnabled`. Empty allows nothing. */
+  corsOrigins: string[];
 }
 
 export interface TailscaleState {
@@ -50,10 +58,39 @@ export interface TailscaleState {
   error: string | null;
 }
 
-export interface PermissionState {
-  accessibility: boolean;
-  screenRecording: boolean;
-}
+/**
+ * What the machine needs from the user before conduit can do its job.
+ *
+ * A tagged union rather than one struct with optional fields, because the two
+ * platforms genuinely differ: macOS withholds two capabilities behind TCC
+ * grants, while Windows grants everything up front but has conditions that
+ * silently change what works. The Server tab is where a user goes to find out
+ * why something isn't working, so it has to tell the truth about which OS
+ * they're on.
+ */
+export type Readiness =
+  | {
+      platform: "macos";
+      accessibility: boolean;
+      screenRecording: boolean;
+    }
+  | {
+      platform: "windows";
+      /** Running as administrator. Without it UIPI silently discards synthetic
+       *  input aimed at any window owned by an elevated process. */
+      elevated: boolean;
+      /** An elevated window is in the foreground right now — the moment the
+       *  above actually bites. */
+      elevatedForeground: boolean;
+      /** Per-monitor DPI aware v2, which is what makes physical-pixel
+       *  coordinates coherent. */
+      dpiAware: boolean;
+      /** Windows.Graphics.Capture is present (Windows 10 1903+). */
+      captureSupported: boolean;
+      /** The capture session can suppress the yellow recording border
+       *  (Windows 11 22000+). */
+      borderlessCapture: boolean;
+    };
 
 /** One row in the Server tab's live log. */
 export interface ToolCallEvent {
@@ -94,6 +131,12 @@ export interface ControlState {
   mode: AccessMode;
   /** Human-readable current action, e.g. "clicking". */
   action: string | null;
+  /**
+   * A panic stop is latched. Every tool stays refused until the user hands
+   * control back — the stop button is not meant to be undone by an agent that
+   * simply retries.
+   */
+  stopped: boolean;
 }
 
 export interface PendingApproval {

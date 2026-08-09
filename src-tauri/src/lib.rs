@@ -1,12 +1,13 @@
 mod agents;
+mod chrome;
 mod commands;
-mod mac;
 mod mcp;
+mod panic_stop;
+mod platform;
 mod state;
 mod store;
 mod tailscale;
 mod tray;
-mod windows;
 
 use std::sync::Arc;
 
@@ -27,7 +28,19 @@ pub fn run() {
         .with_target(false)
         .init();
 
-    tauri::Builder::default()
+    #[allow(unused_mut)]
+    let mut builder = tauri::Builder::default();
+
+    // Windows only — see the Cargo.toml note. Launching conduit again just
+    // brings the running one back from the tray, which is what the user meant.
+    #[cfg(target_os = "windows")]
+    {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            chrome::show_main(app);
+        }));
+    }
+
+    builder
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
@@ -41,13 +54,17 @@ pub fn run() {
             commands::set_default_access,
             commands::set_tools_access,
             commands::set_tool_enabled,
-            commands::get_permissions,
+            commands::set_cors_enabled,
+            commands::set_cors_origins,
+            commands::get_readiness,
             commands::request_accessibility,
             commands::request_screen_recording,
             commands::open_permission_settings,
+            commands::relaunch_elevated,
             commands::get_control_state,
             commands::set_session_mode,
             commands::stop_control,
+            commands::resume_control,
             commands::resolve_approval,
             commands::list_agents,
             commands::install_agent,
@@ -66,9 +83,15 @@ pub fn run() {
 
             tray::build(&handle)?;
 
+            // Logged once at startup because "conduit says it can't take
+            // screenshots" is otherwise unanswerable from a bug report — and
+            // has already been a wrong answer once, when a WinRT probe failed
+            // for want of a COM apartment and was read as an old Windows.
+            tracing::info!(readiness = ?platform::permissions::snapshot(), "readiness");
+
             // Overlay and pill are built up front and kept hidden, so the first
             // takeover doesn't pay webview startup cost mid-action.
-            if let Err(e) = windows::create_chrome(&handle) {
+            if let Err(e) = chrome::create_chrome(&handle) {
                 tracing::warn!("could not create the control chrome: {e}");
             }
 
@@ -82,11 +105,12 @@ pub fn run() {
 
             // Extracting an app icon takes up to a second, and the Agents tab
             // needs several — warm them now so opening the tab is instant.
-            // Must be the main thread: this is AppKit.
+            // Must be the main thread: the macOS path is AppKit, which is not
+            // safe to touch anywhere else.
             let icon_app = handle.clone();
             let _ = handle.run_on_main_thread(move || {
                 let _ = icon_app;
-                mac::appicon::warm_cache(&agents::icon_bundle_ids(), 64.0);
+                platform::appicon::warm_cache(&agents::icon_keys(), 64.0);
             });
 
             // Sharing is a persisted setting, so restore it on launch —
@@ -101,13 +125,13 @@ pub fn run() {
                 });
             }
 
-            // Hold-Escape panic stop. Needs Accessibility, which the user may
-            // not have granted yet — retry once it appears rather than losing
-            // the shortcut for the whole run.
+            // Hold-Escape panic stop. On macOS this needs Accessibility, which
+            // the user may not have granted yet — retry once it appears rather
+            // than losing the shortcut for the whole run.
             let panic_state = shared.clone();
             tauri::async_runtime::spawn(async move {
                 loop {
-                    if mac::panic_stop::install(panic_state.clone()) {
+                    if panic_stop::install(panic_state.clone()) {
                         break;
                     }
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;

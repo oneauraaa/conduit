@@ -4,24 +4,29 @@ import {
   Accessibility,
   Check,
   Copy,
+  Hand,
   MonitorPlay,
   Play,
   RotateCw,
+  ShieldAlert,
   Square,
   TriangleAlert,
 } from "lucide-react";
 import { Button, Card, Row, SectionLabel, TabShell } from "@/components/Panel";
 import { StatusDot } from "@/components/StatusDot";
 import {
-  getPermissions,
+  getControlState,
+  getReadiness,
   openPermissionSettings,
+  relaunchElevated,
+  resumeControl,
   restartServer,
   setPort as setPortIpc,
   startServer,
   stopServer,
   subscribe,
 } from "@/lib/ipc";
-import type { ControlState, PermissionState, ServerState, ToolCallEvent } from "@/lib/types";
+import type { ControlState, Readiness, ServerState, ToolCallEvent } from "@/lib/types";
 import { cn } from "@/lib/cn";
 
 const MAX_LOG = 40;
@@ -43,7 +48,8 @@ function useUptime(startedAt: number | null) {
 }
 
 export function ServerTab({ server }: { server: ServerState }) {
-  const [perms, setPerms] = useState<PermissionState>({
+  const [perms, setPerms] = useState<Readiness>({
+    platform: "macos",
     accessibility: false,
     screenRecording: false,
   });
@@ -61,11 +67,15 @@ export function ServerTab({ server }: { server: ServerState }) {
   useEffect(() => setPortDraft(String(server.port)), [server.port]);
 
   useEffect(() => {
-    void getPermissions().then(setPerms).catch(() => {});
-    const offPerms = subscribe("permissions:changed", setPerms);
+    void getReadiness().then(setPerms).catch(() => {});
+    const offPerms = subscribe("readiness:changed", setPerms);
     const offLog = subscribe("server:tool-call", (e) =>
       setLog((prev) => [e, ...prev].slice(0, MAX_LOG)),
     );
+    // Fetch once as well as subscribing: `control:state` only fires on change,
+    // so a tab opened *after* a stop would otherwise show nothing and leave the
+    // user with no way back.
+    void getControlState().then(setControl).catch(() => {});
     const offControl = subscribe("control:state", setControl);
     return () => {
       offPerms();
@@ -74,11 +84,14 @@ export function ServerTab({ server }: { server: ServerState }) {
     };
   }, []);
 
-  // macOS only re-evaluates TCC grants for a running process on the next check,
-  // so poll while the window is visible to catch a grant made in System Settings.
+  // Both platforms need the poll, for different reasons. macOS only
+  // re-evaluates TCC grants for a running process on the next check, so this
+  // catches a grant made in System Settings. On Windows the foreground window
+  // changes constantly, and whether it is elevated is half of what this card
+  // reports.
   useEffect(() => {
     const t = setInterval(() => {
-      if (!document.hidden) void getPermissions().then(setPerms).catch(() => {});
+      if (!document.hidden) void getReadiness().then(setPerms).catch(() => {});
     }, 2000);
     return () => clearInterval(t);
   }, []);
@@ -100,6 +113,42 @@ export function ServerTab({ server }: { server: ServerState }) {
 
   return (
     <TabShell>
+      {/* ── the way back from a panic stop ─────────────────── */}
+      {/* Sits above everything, because while this is showing nothing else on
+          the page matters: every tool is refused. The stop is latched by
+          design — an agent must not be able to shrug it off by retrying — so
+          this button is the only thing that clears it. Without it the endpoint
+          stays shut for the life of the process. */}
+      <AnimatePresence initial={false}>
+        {control?.stopped && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+            className="overflow-hidden"
+          >
+            <Card className="border-amber-500/40">
+              <Row
+                icon={<Hand size={15} className="text-amber-500" />}
+                title="you stopped control"
+                description="every tool is refused until you hand it back"
+              >
+                <Button
+                  onClick={() =>
+                    void resumeControl()
+                      .then(setControl)
+                      .catch(() => {})
+                  }
+                >
+                  hand back
+                </Button>
+              </Row>
+            </Card>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* ── status ─────────────────────────────────────────── */}
       <Card className="relative">
         {running && (
@@ -202,24 +251,32 @@ export function ServerTab({ server }: { server: ServerState }) {
         </div>
       </Card>
 
-      {/* ── permissions ────────────────────────────────────── */}
+      {/* ── readiness ──────────────────────────────────────── */}
       <div className="flex flex-col gap-2">
-        <SectionLabel>macos permissions</SectionLabel>
+        <SectionLabel>
+          {perms.platform === "macos" ? "macos permissions" : "windows readiness"}
+        </SectionLabel>
         <Card>
-          <PermissionRow
-            icon={<Accessibility size={15} />}
-            title="accessibility"
-            granted={perms.accessibility}
-            need="needed to move the cursor, click, type and read the screen"
-            onGrant={() => void openPermissionSettings("accessibility")}
-          />
-          <PermissionRow
-            icon={<MonitorPlay size={15} />}
-            title="screen recording"
-            granted={perms.screenRecording}
-            need="needed for screenshots, so the agent can see what it's doing"
-            onGrant={() => void openPermissionSettings("screen")}
-          />
+          {perms.platform === "macos" ? (
+            <>
+              <PermissionRow
+                icon={<Accessibility size={15} />}
+                title="accessibility"
+                granted={perms.accessibility}
+                need="needed to move the cursor, click, type and read the screen"
+                onGrant={() => void openPermissionSettings("accessibility")}
+              />
+              <PermissionRow
+                icon={<MonitorPlay size={15} />}
+                title="screen recording"
+                granted={perms.screenRecording}
+                need="needed for screenshots, so the agent can see what it's doing"
+                onGrant={() => void openPermissionSettings("screen")}
+              />
+            </>
+          ) : (
+            <WindowsReadiness state={perms} />
+          )}
         </Card>
       </div>
 
@@ -281,6 +338,93 @@ export function ServerTab({ server }: { server: ServerState }) {
         </Card>
       </div>
     </TabShell>
+  );
+}
+
+/**
+ * The Windows counterpart of the two macOS grant rows.
+ *
+ * Windows asks for no permission, so there is nothing to grant and a pair of
+ * always-green rows would be theatre. What it does have is UIPI: an unelevated
+ * process cannot send input to a window owned by an elevated one, and Windows
+ * reports no error when it discards the click. That is the failure this card
+ * exists to explain, so it leads with it and only nags when it is actually
+ * biting — an elevated window in the foreground right now.
+ */
+function WindowsReadiness({
+  state,
+}: {
+  state: Extract<Readiness, { platform: "windows" }>;
+}) {
+  const blocked = !state.elevated && state.elevatedForeground;
+
+  return (
+    <>
+      <Row
+        icon={
+          <span className={state.elevated ? "text-[var(--color-aqua)]" : blocked ? "text-amber-500" : "text-[rgb(var(--text-faint))]"}>
+            <ShieldAlert size={15} />
+          </span>
+        }
+        title="administrator"
+        description={
+          state.elevated
+            ? "running elevated — every window is reachable"
+            : blocked
+              ? "the window in front is elevated, so clicks and keystrokes aimed at it are being discarded"
+              : "not needed for everyday apps; only elevated windows (task manager, installers) are out of reach"
+        }
+      >
+        {state.elevated ? (
+          <span className="flex items-center gap-1 text-[11px] font-medium text-[var(--color-aqua)]">
+            <Check size={12} strokeWidth={3} />
+          </span>
+        ) : (
+          <Button onClick={() => void relaunchElevated()}>
+            {blocked && <TriangleAlert size={11} />} restart as admin
+          </Button>
+        )}
+      </Row>
+
+      <Row
+        icon={
+          <span
+            className={state.captureSupported ? "text-[var(--color-aqua)]" : "text-amber-500"}
+          >
+            <MonitorPlay size={15} />
+          </span>
+        }
+        title="screen capture"
+        description={
+          !state.captureSupported
+            ? "windows.graphics.capture is missing — windows 10 1903 or newer is required for screenshots"
+            : state.borderlessCapture
+              ? "ready, with no capture border"
+              : "ready, but this build of windows draws a yellow border around the screen while capturing"
+        }
+      >
+        {state.captureSupported && (
+          <span className="flex items-center gap-1 text-[11px] font-medium text-[var(--color-aqua)]">
+            <Check size={12} strokeWidth={3} />
+          </span>
+        )}
+      </Row>
+
+      {/* Only surfaced when wrong. Under a correct manifest this is always
+          true, and a permanently-green row explaining DPI awareness would be
+          noise in a panel the user opens to find problems. */}
+      {!state.dpiAware && (
+        <Row
+          icon={
+            <span className="text-amber-500">
+              <TriangleAlert size={15} />
+            </span>
+          }
+          title="dpi awareness"
+          description="conduit is not per-monitor dpi aware, so coordinates on a scaled display will be wrong. this is a bug — please report it."
+        />
+      )}
+    </>
   );
 }
 

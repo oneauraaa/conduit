@@ -1,5 +1,5 @@
 import { motion } from "motion/react";
-import { Bot, Server, Wrench, type LucideIcon } from "lucide-react";
+import { Bot, Server, SlidersHorizontal, Wrench, type LucideIcon } from "lucide-react";
 import { TailscaleIcon } from "./TailscaleIcon";
 import { cn } from "@/lib/cn";
 import { Logo } from "./Logo";
@@ -7,7 +7,7 @@ import { ThemeToggle } from "./ThemeToggle";
 import { StatusDot } from "./StatusDot";
 import type { ServerStatus } from "@/lib/types";
 
-export type Tab = "server" | "tools" | "agents" | "tailscale";
+export type Tab = "server" | "tools" | "agents" | "tailscale" | "settings";
 
 /** Tailscale's mark isn't a Lucide icon, so the type allows either. */
 type TabIcon = LucideIcon | ((p: { size?: number; className?: string }) => React.ReactElement);
@@ -17,6 +17,7 @@ const TABS: { id: Tab; label: string; icon: TabIcon }[] = [
   { id: "tools", label: "tools", icon: Wrench },
   { id: "agents", label: "agents", icon: Bot },
   { id: "tailscale", label: "tailscale", icon: TailscaleIcon },
+  { id: "settings", label: "settings", icon: SlidersHorizontal },
 ];
 
 export function Sidebar({

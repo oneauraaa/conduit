@@ -43,10 +43,10 @@ const MODE_LABEL: Record<AccessMode, string> = {
 };
 
 /**
- * Floats just above the Dock while an agent is driving.
+ * Floats just above the Dock (or the Windows taskbar) while an agent is driving.
  *
  * The window is sized to the pill and repositioned by Rust from
- * NSScreen.visibleFrame, so it tracks the Dock wherever it lives.
+ * the screen's work area, so it tracks the Dock or taskbar wherever it lives.
  *
  * The mode dropdown can loosen or tighten *this session's* behaviour, but
  * deliberately cannot touch which tools exist — that gate lives in the Tools
@@ -58,6 +58,7 @@ export function Pill() {
     agent: demo ? "claude code" : null,
     mode: "auto",
     action: demo ? "clicking" : null,
+    stopped: false,
   });
   const [approval, setApproval] = useState<PendingApproval | null>(
     demo === "approval" ? DEMO_APPROVAL : null,
@@ -83,7 +84,12 @@ export function Pill() {
   const active = control.phase === "active";
 
   return (
-    <div className="flex h-full w-full items-end justify-center overflow-hidden pb-1">
+    // `pb-10` is the glow's clearance, not decoration. The aura below is a
+    // blurred box inset 12px past the pill with a 24px blur, so it still has
+    // ink ~40px beyond the pill's edge. With the old 4px of bottom padding the
+    // window clipped straight through it, and the soft falloff became a hard
+    // line with corners. Keep this and `PILL_H` in `chrome.rs` in step.
+    <div className="flex h-full w-full items-end justify-center overflow-hidden pb-10">
       {/* Skipping the entry animation in demo mode keeps headless screenshots
           from catching the pill mid-flight at opacity 0. */}
       <AnimatePresence initial={!demo}>

@@ -85,6 +85,63 @@ accessibility-sys = "0.2"
 # `macos_14_0` is what gates SCScreenshotManager — the single-frame capture path.
 screencapturekit = { version = "8", features = ["macos_14_0"] }
 
+[target.'cfg(target_os = "windows")'.dependencies]
+# Pinned to the 0.61 already in the tree via tao/wry/tauri/webview2-com. Two
+# copies of the largest crate in the dependency graph would double build times
+# *and* make `window.hwnd()`'s HWND a different type from the one these APIs
+# want, which reads as a baffling type error.
+windows = { version = "0.61", features = [
+  # WinRT — capture
+  "Foundation",
+  "Foundation_Metadata",                  # ApiInformation, for the border check
+  "Graphics",
+  "Graphics_Capture",
+  "Graphics_DirectX",
+  "Graphics_DirectX_Direct3D11",
+
+  # Win32 — capture plumbing
+  "Win32_Graphics_Direct3D",
+  "Win32_Graphics_Direct3D11",
+  "Win32_Graphics_Dxgi",
+  "Win32_Graphics_Dxgi_Common",
+  "Win32_System_WinRT",
+  "Win32_System_WinRT_Direct3D11",
+  "Win32_System_WinRT_Graphics_Capture",  # IGraphicsCaptureItemInterop
+
+  # geometry, windows, input, hooks
+  "Win32_Graphics_Dwm",                   # DWMWA_CLOAKED, EXTENDED_FRAME_BOUNDS
+  "Win32_Graphics_Gdi",                   # EnumDisplayMonitors, GetDIBits
+  "Win32_UI_HiDpi",
+  "Win32_UI_Input_KeyboardAndMouse",      # SendInput, AttachThreadInput
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_UI_Accessibility",               # IUIAutomation
+
+  # shell, registry, process, crypto, clipboard
+  "Win32_Security",                       # OpenProcessToken, TOKEN_ELEVATION
+  "Win32_Security_Cryptography",          # BCryptGenRandom
+  "Win32_Storage_FileSystem",             # version resources, for app names
+  "Win32_System_Com",
+  "Win32_System_DataExchange",            # clipboard
+  "Win32_System_Environment",             # ExpandEnvironmentStringsW (App Paths)
+  "Win32_System_LibraryLoader",
+  "Win32_System_Memory",                  # GlobalAlloc/Lock, for the clipboard
+  "Win32_System_Registry",                # App Paths
+  "Win32_System_Threading",
+  "Win32_UI_Shell",                       # ShellExecuteW, SHGetFileInfoW
+] }
+
+# Toasts. tauri-plugin-notification wraps this same crate but needs an
+# AppHandle, which would change `notify`'s signature on both platforms for no
+# macOS benefit.
+tauri-winrt-notification = "0.7"
+
+# macOS gets single-instance behaviour free: Launch Services activates the
+# running .app instead of starting a second copy. Windows has no such rule, so
+# without this, launching conduit twice leaves a second process that cannot bind
+# port 6767 and shows a broken window with no explanation — and because closing
+# hides to the tray, they accumulate.
+tauri-plugin-single-instance = "2"
+
 [profile.release]
 codegen-units = 1
 lto = true

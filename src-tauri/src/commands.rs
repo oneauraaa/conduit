@@ -3,10 +3,10 @@
 use tauri::{AppHandle, Emitter, Manager, State, Wry};
 
 use crate::agents::{self, AgentTarget};
-use crate::mac::permissions;
 use crate::mcp::{catalog::ToolDef, server};
+use crate::platform::permissions;
 use crate::state::{
-    AccessMode, ControlState, Decision, PermissionState, ServerState, Settings, Shared, ToolsAccess,
+    AccessMode, ControlState, Decision, Readiness, ServerState, Settings, Shared, ToolsAccess,
 };
 
 /* ── server ── */
@@ -83,10 +83,34 @@ pub fn set_tool_enabled(state: State<'_, Shared>, tool: String, enabled: bool) -
     })
 }
 
-/* ── permissions ── */
+/// Turns browser access on or off. Takes effect immediately — the origin
+/// guard reads settings per request, so there is no server restart.
+#[tauri::command]
+pub fn set_cors_enabled(state: State<'_, Shared>, enabled: bool) -> Settings {
+    state.update_settings(|s| s.cors_enabled = enabled)
+}
+
+/// Replaces the allowlist. Origins are stored exactly as the user typed them,
+/// minus surrounding whitespace and any trailing slash; comparison is
+/// normalized in `mcp::cors`.
+#[tauri::command]
+pub fn set_cors_origins(state: State<'_, Shared>, origins: Vec<String>) -> Settings {
+    let cleaned: Vec<String> = origins
+        .into_iter()
+        .map(|o| o.trim().trim_end_matches('/').to_string())
+        .filter(|o| !o.is_empty())
+        .collect();
+    state.update_settings(|s| s.cors_origins = cleaned)
+}
+
+/* ── readiness ── */
+
+/// Every command below stays registered on both platforms, with the bodies
+/// cfg'd rather than the `generate_handler!` entries. Gating individual entries
+/// in that macro is possible and the errors when you get it wrong are terrible.
 
 #[tauri::command]
-pub fn get_permissions() -> PermissionState {
+pub fn get_readiness() -> Readiness {
     permissions::snapshot()
 }
 
@@ -102,26 +126,45 @@ pub fn request_screen_recording() {
 
 /// Opens the relevant System Settings pane. macOS only shows its own consent
 /// prompt once per bundle, so this is the reliable path on every later attempt.
+///
+/// A no-op on Windows, which withholds nothing behind a settings pane.
 #[tauri::command]
 pub fn open_permission_settings(app: AppHandle<Wry>, which: String) {
-    // Ask for the system prompt first — on a first run that's the nicer flow,
-    // and it also registers conduit in the list so the pane isn't empty.
-    match which.as_str() {
-        "accessibility" => {
-            permissions::prompt_accessibility();
+    #[cfg(target_os = "macos")]
+    {
+        // Ask for the system prompt first — on a first run that's the nicer
+        // flow, and it also registers conduit in the list so the pane isn't
+        // empty.
+        match which.as_str() {
+            "accessibility" => {
+                permissions::prompt_accessibility();
+            }
+            _ => {
+                permissions::prompt_screen_recording();
+            }
         }
-        _ => {
-            permissions::prompt_screen_recording();
-        }
+
+        let pane = match which.as_str() {
+            "accessibility" => "Privacy_Accessibility",
+            _ => "Privacy_ScreenCapture",
+        };
+        let url = format!("x-apple.systempreferences:com.apple.preference.security?{pane}");
+        let _ = tauri_plugin_opener::open_url(url, None::<&str>);
     }
 
-    let pane = match which.as_str() {
-        "accessibility" => "Privacy_Accessibility",
-        _ => "Privacy_ScreenCapture",
-    };
-    let url = format!("x-apple.systempreferences:com.apple.preference.security?{pane}");
-    let _ = tauri_plugin_opener::open_url(url, None::<&str>);
-    let _ = app.emit("permissions:changed", permissions::snapshot());
+    #[cfg(not(target_os = "macos"))]
+    let _ = which;
+
+    let _ = app.emit("readiness:changed", permissions::snapshot());
+}
+
+/// Restarts conduit as administrator so it can drive elevated windows.
+///
+/// Windows only. This tears the current process down on success, so it is the
+/// one command here that does not return to its caller.
+#[tauri::command]
+pub fn relaunch_elevated(app: AppHandle<Wry>) -> Result<(), String> {
+    permissions::relaunch_elevated(&app)
 }
 
 /* ── control session ── */
@@ -139,6 +182,16 @@ pub fn set_session_mode(state: State<'_, Shared>, mode: AccessMode) -> ControlSt
 #[tauri::command]
 pub fn stop_control(state: State<'_, Shared>) {
     state.abort();
+}
+
+/// Hands control back after a panic stop.
+///
+/// The stop is latched on purpose, so without this the endpoint stays closed
+/// for the life of the process and the only remedy is restarting conduit.
+#[tauri::command]
+pub fn resume_control(state: State<'_, Shared>) -> ControlState {
+    state.resume();
+    state.control()
 }
 
 #[tauri::command]

@@ -11,14 +11,7 @@ use image::{ImageEncoder, codecs::png::PngEncoder};
 use screencapturekit::prelude::*;
 use screencapturekit::screenshot_manager::{CGImageExt, SCScreenshotManager};
 
-use crate::mac::screen::Display;
-
-pub struct Shot {
-    pub png: Vec<u8>,
-    /// Pixel dimensions of the encoded image (after any downscale).
-    pub width: u32,
-    pub height: u32,
-}
+use crate::platform::types::{Display, Shot};
 
 /// Captures `display`, optionally cropping to `region` and scaling the result.
 ///
@@ -26,8 +19,8 @@ pub struct Shot {
 /// relative to the display's own origin.
 ///
 /// `scale` downsamples the final image. Screens are physically large and models
-/// are billed per pixel, so the default of 1.0 already means "logical points,
-/// not backing pixels" — a Retina display is captured at its point size.
+/// are billed per pixel, so the default already means "logical points, not
+/// backing pixels" — see `screen::default_capture_scale`.
 pub fn capture(
     display: &Display,
     region: Option<(f64, f64, f64, f64)>,

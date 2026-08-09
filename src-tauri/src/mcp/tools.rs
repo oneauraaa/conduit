@@ -1,8 +1,13 @@
 //! The MCP tool surface.
 //!
 //! Every handler is thin on purpose: it parses arguments, calls through
-//! [`gate::run`], and delegates to `mac/`. Policy lives in the gate; platform
-//! detail lives in `mac/`. Nothing in between.
+//! [`gate::run`], and delegates to `platform/`. Policy lives in the gate;
+//! platform detail lives in `platform/`. Nothing in between.
+//!
+//! There is deliberately no `#[cfg]` in this file. Both backends expose the
+//! same functions with the same signatures, so anything that would need one —
+//! the default screenshot scale, which shell to spawn, what a window listing is
+//! hiding — is a small addition to the platform contract instead.
 
 use base64::Engine;
 use rmcp::handler::server::router::tool::ToolRouter;
@@ -15,7 +20,8 @@ use rmcp::{ErrorData as McpError, RoleServer, ServerHandler, schemars, tool, too
 use serde::Deserialize;
 use tauri::Emitter;
 
-use crate::mac::{ax, capture, clipboard, input, screen, windows as macwin};
+use crate::platform::types::{Button, display_at};
+use crate::platform::{apps, ax, capture, clipboard, input, screen, shell};
 use crate::mcp::gate::{self, CallCtx};
 use crate::state::{CursorEvent, PulseEvent, Shared};
 
@@ -97,7 +103,9 @@ pub struct TypeArgs {
 pub struct KeyArgs {
     /// Key name, e.g. "return", "tab", "escape", "a", "f5", "left".
     pub key: String,
-    /// Any of "cmd", "shift", "alt", "ctrl", "fn".
+    /// Any of "cmd", "ctrl", "shift", "alt", "win", "fn". "cmd" is the shortcut
+    /// modifier — Command on macOS, Control on Windows — so "cmd+c" is copy on
+    /// both. "win"/"super" is the logo key.
     #[serde(default)]
     pub modifiers: Vec<String>,
 }
@@ -144,7 +152,7 @@ pub struct TextArgs {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ShellArgs {
-    /// The command line, run through `/bin/zsh -c`.
+    /// The command line. Run through zsh on macOS, PowerShell on Windows.
     pub command: String,
     /// Give up after this many seconds. Defaults to 30.
     #[serde(default)]
@@ -179,9 +187,9 @@ fn fail(msg: impl Into<String>) -> McpError {
 }
 
 /// conduit's own UI is off limits to agents — see
-/// [`crate::windows::point_hits_conduit`] for why.
+/// [`crate::chrome::point_hits_conduit`] for why.
 fn guard_self_target(app: &tauri::AppHandle, x: f64, y: f64) -> Result<(), McpError> {
-    if crate::windows::point_hits_conduit(app, x, y) {
+    if crate::chrome::point_hits_conduit(app, x, y) {
         return Err(McpError::invalid_request(
             "conduit: that point is inside conduit's own window. its controls are for the user \
              only — you cannot change your own permissions. work around it or ask the user.",
@@ -191,11 +199,24 @@ fn guard_self_target(app: &tauri::AppHandle, x: f64, y: f64) -> Result<(), McpEr
     Ok(())
 }
 
-fn parse_button(s: Option<&str>) -> input::Button {
+/// Reports an input action, but only if the OS actually delivered it.
+///
+/// `click`, `drag`, `scroll` and `type_text` are fire-and-forget by signature,
+/// so without this check a refusal by the OS would be reported to the agent as
+/// success — and it would go on reasoning about a state change that never
+/// happened. Refusing loudly costs one retry; lying costs the whole session.
+fn input_ok(msg: String) -> Result<CallToolResult, McpError> {
+    match input::blocked_reason() {
+        Some(why) => Err(fail(format!("the input did not reach its target. {why}"))),
+        None => ok(msg),
+    }
+}
+
+fn parse_button(s: Option<&str>) -> Button {
     match s.map(|b| b.to_ascii_lowercase()).as_deref() {
-        Some("right") => input::Button::Right,
-        Some("middle") => input::Button::Middle,
-        _ => input::Button::Left,
+        Some("right") => Button::Right,
+        Some("middle") => Button::Middle,
+        _ => Button::Left,
     }
 }
 
@@ -231,12 +252,12 @@ impl Conduit {
     /// geometry comes from the cache because NSScreen is main-thread-only and
     /// this runs on a tokio worker.
     fn emit_cursor(&self, x: f64, y: f64) {
-        let displays = crate::windows::cached_displays();
-        let idx = screen::display_at(&displays, x, y);
+        let displays = crate::chrome::cached_displays();
+        let idx = display_at(&displays, x, y);
         let Some(d) = displays.get(idx) else { return };
 
         let _ = self.state.app.emit_to(
-            crate::windows::overlay_label(idx),
+            crate::chrome::overlay_label(idx),
             "control:cursor",
             CursorEvent {
                 x: x - d.x,
@@ -248,10 +269,10 @@ impl Conduit {
 
     fn emit_pulse(&self, kind: &'static str) {
         let (x, y) = input::cursor_position();
-        let displays = crate::windows::cached_displays();
-        let idx = screen::display_at(&displays, x, y);
+        let displays = crate::chrome::cached_displays();
+        let idx = display_at(&displays, x, y);
         let _ = self.state.app.emit_to(
-            crate::windows::overlay_label(idx),
+            crate::chrome::overlay_label(idx),
             "control:pulse",
             PulseEvent { kind, display: idx },
         );
@@ -271,8 +292,6 @@ fn pretty_agent(raw: &str) -> String {
         "openclaw".into()
     } else if lower.contains("opencode") {
         "opencode".into()
-    } else if lower.contains("gemini") || lower.contains("antigravity") {
-        "gemini".into()
     } else if lower.contains("claude") {
         "claude".into()
     } else {
@@ -301,16 +320,24 @@ impl Conduit {
             &self.state,
             CallCtx { tool: "screenshot", detail, agent },
             || async {
-                let displays = crate::windows::cached_displays();
+                let displays = crate::chrome::cached_displays();
                 let index = args.display.unwrap_or(0);
                 let display = *displays
                     .get(index)
                     .ok_or_else(|| fail(format!("no display at index {index}")))?;
 
                 let region = args.region.map(|r| (r[0], r[1], r[2], r[3]));
-                let scale = args.scale.unwrap_or(1.0).clamp(0.1, 1.0);
+                // The default is not 1.0: it means "one image pixel per unit of
+                // conduit's coordinate space", which is a downscale on a Retina
+                // or a high-DPI Windows monitor. Screens are large and models
+                // are billed per pixel, so the cost of a screenshot should not
+                // depend on how the user configured their display.
+                let scale = args
+                    .scale
+                    .unwrap_or_else(|| screen::default_capture_scale(&display))
+                    .clamp(0.1, 1.0);
 
-                // ScreenCaptureKit blocks; keep it off the async runtime.
+                // Capture blocks on both platforms; keep it off the async runtime.
                 let shot = tokio::task::spawn_blocking(move || {
                     capture::capture(&display, region, scale)
                 })
@@ -318,11 +345,18 @@ impl Conduit {
                 .map_err(|e| fail(format!("capture task failed: {e}")))?
                 .map_err(fail)?;
 
+                let (rw, rh) = region
+                    .map(|(_, _, w, h)| (w, h))
+                    .unwrap_or((display.width, display.height));
+
                 let b64 = base64::engine::general_purpose::STANDARD.encode(&shot.png);
                 Ok(CallToolResult::success(vec![
+                    // The ratio matters to the agent: it clicks in coordinate
+                    // space, not image space, so it needs to know the image is
+                    // a scaled view of the region rather than 1:1 with it.
                     ContentBlock::text(format!(
-                        "display {index}, {}x{} points captured at {}x{} pixels",
-                        display.width as u32, display.height as u32, shot.width, shot.height
+                        "display {index}, {}x{} of coordinate space captured at {}x{} pixels",
+                        rw as u32, rh as u32, shot.width, shot.height
                     )),
                     ContentBlock::image(b64, "image/png"),
                 ]))
@@ -341,7 +375,7 @@ impl Conduit {
         gate::run(
             &self.state,
             CallCtx { tool: "list_displays", detail: None, agent },
-            || async { json_ok(&crate::windows::cached_displays()) },
+            || async { json_ok(&crate::chrome::cached_displays()) },
         )
         .await
     }
@@ -363,7 +397,7 @@ impl Conduit {
             || async {
                 guard_self_target(&self.state.app, args.x, args.y)?;
                 input::glide(args.x, args.y, |x, y| self.emit_cursor(x, y)).await;
-                ok(format!("cursor at {:.0}, {:.0}", args.x, args.y))
+                input_ok(format!("cursor at {:.0}, {:.0}", args.x, args.y))
             },
         )
         .await
@@ -400,7 +434,7 @@ impl Conduit {
                 input::click(button, count).await;
                 self.emit_pulse("click");
                 let (x, y) = input::cursor_position();
-                ok(format!("clicked at {x:.0}, {y:.0}"))
+                input_ok(format!("clicked at {x:.0}, {y:.0}"))
             },
         )
         .await
@@ -427,7 +461,7 @@ impl Conduit {
                     input::glide(x, y, |px, py| self.emit_cursor(px, py)).await;
                 }
                 input::drag(args.to_x, args.to_y, button, |px, py| self.emit_cursor(px, py)).await;
-                ok(format!("dragged to {:.0}, {:.0}", args.to_x, args.to_y))
+                input_ok(format!("dragged to {:.0}, {:.0}", args.to_x, args.to_y))
             },
         )
         .await
@@ -452,7 +486,7 @@ impl Conduit {
                     input::glide(x, y, |px, py| self.emit_cursor(px, py)).await;
                 }
                 input::scroll(dx, dy);
-                ok(format!("scrolled dx {dx}, dy {dy}"))
+                input_ok(format!("scrolled dx {dx}, dy {dy}"))
             },
         )
         .await
@@ -479,7 +513,7 @@ impl Conduit {
             || async {
                 input::type_text(&args.text).await;
                 self.emit_pulse("key");
-                ok(format!("typed {} characters", args.text.chars().count()))
+                input_ok(format!("typed {} characters", args.text.chars().count()))
             },
         )
         .await
@@ -506,7 +540,7 @@ impl Conduit {
             || async {
                 input::key_press(&args.key, &args.modifiers).map_err(fail)?;
                 self.emit_pulse("key");
-                ok(format!("pressed {combo}"))
+                input_ok(format!("pressed {combo}"))
             },
         )
         .await
@@ -542,27 +576,18 @@ impl Conduit {
             &self.state,
             CallCtx { tool: "list_windows", detail: None, agent },
             || async {
-                let windows = macwin::list_windows();
-
-                // macOS gates kCGWindowName behind Screen Recording, so without
-                // that grant every title comes back empty and the list looks
-                // broken rather than restricted. Say which it is.
-                let titles_hidden = !windows.is_empty()
-                    && windows.iter().all(|w| w.title.is_empty())
-                    && !crate::mac::permissions::screen_recording_granted();
+                let windows = apps::list_windows();
 
                 let json = serde_json::to_string_pretty(&windows)
                     .map_err(|e| fail(e.to_string()))?;
 
-                if titles_hidden {
-                    return ok(format!(
-                        "note: window titles are empty because conduit does not have \
-                         Screen Recording permission — macOS hides them without it. \
-                         Bounds and app names are still accurate. Ask the user to grant \
-                         it in conduit's Server tab.\n\n{json}"
-                    ));
+                // A listing can be technically correct and still misleading —
+                // macOS blanks every title without Screen Recording. The
+                // platform layer knows what its own results are hiding.
+                match apps::list_windows_hint(&windows) {
+                    Some(note) => ok(format!("note: {note}\n\n{json}")),
+                    None => ok(json),
                 }
-                ok(json)
             },
         )
         .await
@@ -579,7 +604,7 @@ impl Conduit {
             &self.state,
             CallCtx { tool: "focus_window", detail: Some(format!("#{}", args.window_id)), agent },
             || async {
-                macwin::focus_window(args.window_id).map_err(fail)?;
+                apps::focus_window(args.window_id).map_err(fail)?;
                 ok(format!("focused window {}", args.window_id))
             },
         )
@@ -601,7 +626,7 @@ impl Conduit {
                 agent,
             },
             || async {
-                macwin::set_window_bounds(args.window_id, args.x, args.y, args.width, args.height)
+                apps::set_window_bounds(args.window_id, args.x, args.y, args.width, args.height)
                     .map_err(fail)?;
                 ok("window moved")
             },
@@ -615,7 +640,7 @@ impl Conduit {
         gate::run(
             &self.state,
             CallCtx { tool: "list_apps", detail: None, agent },
-            || async { json_ok(&macwin::list_apps()) },
+            || async { json_ok(&apps::list_apps()) },
         )
         .await
     }
@@ -631,7 +656,7 @@ impl Conduit {
             &self.state,
             CallCtx { tool: "open_app", detail: Some(args.name.clone()), agent },
             || async {
-                macwin::open_app(&args.name).map_err(fail)?;
+                apps::open_app(&args.name).map_err(fail)?;
                 ok(format!("opened {}", args.name))
             },
         )
@@ -649,7 +674,7 @@ impl Conduit {
             &self.state,
             CallCtx { tool: "quit_app", detail: Some(args.name.clone()), agent },
             || async {
-                macwin::quit_app(&args.name).map_err(fail)?;
+                apps::quit_app(&args.name).map_err(fail)?;
                 ok(format!("asked {} to quit", args.name))
             },
         )
@@ -762,9 +787,7 @@ impl Conduit {
                     args.timeout_seconds.unwrap_or(30).clamp(1, 300),
                 );
 
-                let child = tokio::process::Command::new("/bin/zsh")
-                    .arg("-c")
-                    .arg(&args.command)
+                let child = shell::command(&args.command)
                     .stdout(std::process::Stdio::piped())
                     .stderr(std::process::Stdio::piped())
                     .spawn()
@@ -834,7 +857,7 @@ impl Conduit {
             &self.state,
             CallCtx { tool: "notify", detail: Some(args.title.clone()), agent },
             || async {
-                macwin::notify(&args.title, &args.body).map_err(fail)?;
+                apps::notify(&args.title, &args.body).map_err(fail)?;
                 ok("notification posted")
             },
         )

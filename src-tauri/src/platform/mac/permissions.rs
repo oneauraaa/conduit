@@ -11,7 +11,7 @@ use accessibility_sys::{AXIsProcessTrusted, AXIsProcessTrustedWithOptions};
 use objc2_core_foundation::{CFBoolean, CFDictionary, CFRetained, CFString};
 use objc2_core_graphics::{CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess};
 
-use crate::state::PermissionState;
+use crate::state::Readiness;
 
 pub fn accessibility_granted() -> bool {
     unsafe { AXIsProcessTrusted() }
@@ -44,9 +44,15 @@ pub fn prompt_screen_recording() -> bool {
     CGRequestScreenCaptureAccess()
 }
 
-pub fn snapshot() -> PermissionState {
-    PermissionState {
+pub fn snapshot() -> Readiness {
+    Readiness::MacOS {
         accessibility: accessibility_granted(),
         screen_recording: screen_recording_granted(),
     }
+}
+
+/// No-op on macOS: there is no elevation to gain, and the two things conduit
+/// needs are TCC grants the user makes in System Settings instead.
+pub fn relaunch_elevated(_app: &tauri::AppHandle<tauri::Wry>) -> Result<(), String> {
+    Err("elevation is a Windows concept; macOS uses the Accessibility and Screen Recording grants".into())
 }

@@ -16,7 +16,11 @@ export default defineConfig({
     alias: { "@": resolve(import.meta.dirname, "src") },
   },
   build: {
-    target: "safari18",
+    // Two webviews to satisfy: WKWebView on macOS and WebView2 (Chromium) on
+    // Windows. Targeting only safari18 would let through syntax Safari has and
+    // an older pinned WebView2 does not, and the failure mode is a blank window
+    // with a syntax error in a console nobody opens.
+    target: process.platform === "win32" ? "chrome110" : "safari18",
     rollupOptions: {
       input: {
         main: resolve(import.meta.dirname, "index.html"),
