@@ -9,6 +9,7 @@ mod state;
 mod store;
 mod tailscale;
 mod tray;
+mod web_search;
 
 use std::sync::Arc;
 

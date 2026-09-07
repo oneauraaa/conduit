@@ -173,6 +173,15 @@ pub struct NotifyArgs {
     pub body: String,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct WebSearchArgs {
+    /// The words to search for.
+    pub query: String,
+    /// Number of links to return. Defaults to 5 and is capped at 10.
+    #[serde(default)]
+    pub max_results: Option<usize>,
+}
+
 /* ── helpers ────────────────────────────────────────────────── */
 
 fn ok(text: impl Into<String>) -> Result<CallToolResult, McpError> {
@@ -741,6 +750,33 @@ impl Conduit {
     }
 
     /* ── system ── */
+
+    #[tool(description = "Search the web with DuckDuckGo and return result links and snippets.")]
+    async fn web_search(
+        &self,
+        Parameters(args): Parameters<WebSearchArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        let agent = self.agent(&ctx);
+        let detail = Some(args.query.chars().take(64).collect::<String>());
+        let query = args.query;
+        let max_results = args.max_results;
+
+        gate::run(
+            &self.state,
+            CallCtx { tool: "web_search", detail, agent },
+            || async move {
+                let response = tokio::task::spawn_blocking(move || {
+                    crate::web_search::search(&query, max_results)
+                })
+                .await
+                .map_err(|error| fail(format!("DuckDuckGo search worker failed: {error}")))?
+                .map_err(fail)?;
+                json_ok(&response)
+            },
+        )
+        .await
+    }
 
     #[tool(description = "Read the clipboard's text.")]
     async fn clipboard_read(

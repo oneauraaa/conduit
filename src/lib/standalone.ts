@@ -229,6 +229,7 @@ export const catalog: ToolDef[] = [
   { name: "quit_app", group: "windows", summary: "ask an application to quit", risky: true },
   { name: "read_screen_text", group: "accessibility", summary: "read on-screen text and control bounds from the accessibility tree", risky: false },
   { name: "find_element", group: "accessibility", summary: "locate a control by its label and get a point to click", risky: false },
+  { name: "web_search", group: "system", summary: "search the web with DuckDuckGo", risky: false },
   { name: "clipboard_read", group: "system", summary: "read the clipboard's text", risky: false },
   { name: "clipboard_write", group: "system", summary: "replace the clipboard's text", risky: true },
   { name: "run_shell", group: "system", summary: "run a shell command and capture its output", risky: true },

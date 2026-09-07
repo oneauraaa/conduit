@@ -74,6 +74,7 @@ pub static CATALOG: &[ToolDef] = &[
         false,
     ),
     // system
+    tool("web_search", System, "search the web with DuckDuckGo", false),
     tool("clipboard_read", System, "read the clipboard's text", false),
     tool("clipboard_write", System, "replace the clipboard's text", true),
     tool("run_shell", System, "run a shell command and capture its output", true),
@@ -113,6 +114,7 @@ pub fn action_label(name: &str) -> &'static str {
         "open_app" => "opening an app",
         "quit_app" => "quitting an app",
         "read_screen_text" | "find_element" => "reading the screen",
+        "web_search" => "searching DuckDuckGo",
         "clipboard_read" => "reading the clipboard",
         "clipboard_write" => "writing the clipboard",
         "run_shell" => "running a command",
@@ -138,6 +140,7 @@ pub fn approval_summary(name: &str) -> String {
         "open_app" => "open an app",
         "quit_app" => "quit an app",
         "read_screen_text" | "find_element" => "read the screen",
+        "web_search" => "search the web",
         "clipboard_read" => "read your clipboard",
         "clipboard_write" => "overwrite your clipboard",
         "run_shell" => "run a shell command",
@@ -146,4 +149,18 @@ pub fn approval_summary(name: &str) -> String {
         _ => name,
     };
     format!("wants to {verb}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn web_search_is_a_non_risky_system_tool() {
+        let definition = find("web_search").expect("web_search should be catalogued");
+        assert!(matches!(definition.group, ToolGroup::System));
+        assert!(!definition.risky);
+        assert_eq!(action_label("web_search"), "searching DuckDuckGo");
+        assert_eq!(approval_summary("web_search"), "wants to search the web");
+    }
 }
