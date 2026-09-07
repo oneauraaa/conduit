@@ -48,11 +48,9 @@ pub fn screen_recording_granted() -> bool {
     matches!(super::portal::established(), Some(Ok(())))
 }
 
-/// The same grant. On Linux input and capture come from one session, so these
-/// two cannot disagree — they stay separate because the contract has both and
-/// the UI asks them independently.
+/// Input can work through virtual devices even without a capture session.
 pub fn accessibility_granted() -> bool {
-    screen_recording_granted()
+    super::sink::blocked_reason().is_none()
 }
 
 /// Asks for the portal session, raising the dialog if it has not been answered.
@@ -70,11 +68,12 @@ pub fn prompt_screen_recording() -> bool {
 }
 
 pub fn prompt_accessibility() -> bool {
-    prompt_screen_recording()
+    accessibility_granted() || prompt_screen_recording()
 }
 
 pub fn snapshot() -> Readiness {
     let session = super::portal::established();
+    let input_error = super::sink::blocked_reason();
 
     Readiness::Linux {
         desktop: desktop(),
@@ -90,8 +89,8 @@ pub fn snapshot() -> Readiness {
             super::sink::Route::Wlroots => "wlroots".into(),
             super::sink::Route::Portal => "portal".into(),
         },
-        input_ready: super::sink::blocked_reason().is_none(),
-        input_error: super::sink::blocked_reason(),
+        input_ready: input_error.is_none(),
+        input_error,
         capture_ready: super::capture::has_frames(),
         window_management: super::kwin::available(),
         accessibility_tree: super::ax::enabled(),

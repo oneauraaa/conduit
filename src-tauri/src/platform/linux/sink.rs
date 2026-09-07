@@ -35,6 +35,8 @@
 
 use std::sync::OnceLock;
 
+use parking_lot::Mutex;
+
 use super::{portal, wlroots};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,6 +48,34 @@ pub enum Route {
 }
 
 static ROUTE: OnceLock<Route> = OnceLock::new();
+
+/// The first failure in an action survives cleanup releases. Clear it only
+/// when the next high-level action starts, never on a successful key release.
+#[derive(Default)]
+struct ActionFailure(Mutex<Option<String>>);
+
+impl ActionFailure {
+    fn clear(&self) {
+        *self.0.lock() = None;
+    }
+
+    fn record(&self, result: Result<(), String>) -> Result<(), String> {
+        if let Err(why) = &result {
+            self.0.lock().get_or_insert_with(|| why.clone());
+        }
+        result
+    }
+
+    fn reason(&self) -> Option<String> {
+        self.0.lock().clone()
+    }
+}
+
+static FAILURE: ActionFailure = ActionFailure(Mutex::new(None));
+
+pub fn begin_action() {
+    FAILURE.clear();
+}
 
 /// The route this machine uses, decided once.
 ///
@@ -69,6 +99,10 @@ pub fn route() -> Route {
 /// "input is unavailable" that would send a hyprland user hunting for a portal
 /// backend that does not exist.
 pub fn blocked_reason() -> Option<String> {
+    FAILURE.reason().or_else(route_blocked_reason)
+}
+
+fn route_blocked_reason() -> Option<String> {
     match route() {
         Route::Wlroots => wlroots::unavailable_reason(),
         Route::Portal => match portal::established() {
@@ -83,38 +117,71 @@ pub fn blocked_reason() -> Option<String> {
 
 /* ── the four operations `input` needs ──────────────────────── */
 
-pub fn pointer_motion_absolute(x: f64, y: f64) -> Result<(), String> {
+pub fn prepare_key(keysym: i32) -> Result<(), String> {
+    FAILURE.record(match route() {
+        Route::Wlroots => wlroots::prepare_key(keysym),
+        Route::Portal => Ok(()),
+    })
+}
+
+pub fn prepare_text(text: &str) -> Result<usize, String> {
     match route() {
+        Route::Wlroots => wlroots::prepare_text(text),
+        Route::Portal => Ok(text.len()),
+    }.map_err(|why| {
+        let _ = FAILURE.record(Err(why.clone()));
+        why
+    })
+}
+
+pub fn pointer_motion_absolute(x: f64, y: f64) -> Result<(), String> {
+    FAILURE.record(match route() {
         Route::Wlroots => wlroots::pointer_motion_absolute(x, y),
         Route::Portal => portal::session()
-            .map_err(|e| e.message())?
-            .pointer_motion_absolute(x, y),
-    }
+            .map_err(|e| e.message())
+            .and_then(|session| session.pointer_motion_absolute(x, y)),
+    })
 }
 
 pub fn pointer_button(button: i32, pressed: bool) -> Result<(), String> {
-    match route() {
+    FAILURE.record(match route() {
         Route::Wlroots => wlroots::pointer_button(button, pressed),
         Route::Portal => portal::session()
-            .map_err(|e| e.message())?
-            .pointer_button(button, pressed),
-    }
+            .map_err(|e| e.message())
+            .and_then(|session| session.pointer_button(button, pressed)),
+    })
 }
 
 pub fn pointer_axis_discrete(axis: u32, steps: i32) -> Result<(), String> {
-    match route() {
+    FAILURE.record(match route() {
         Route::Wlroots => wlroots::pointer_axis_discrete(axis, steps),
         Route::Portal => portal::session()
-            .map_err(|e| e.message())?
-            .pointer_axis_discrete(axis, steps),
-    }
+            .map_err(|e| e.message())
+            .and_then(|session| session.pointer_axis_discrete(axis, steps)),
+    })
 }
 
 pub fn keyboard_keysym(keysym: i32, pressed: bool) -> Result<(), String> {
-    match route() {
+    FAILURE.record(match route() {
         Route::Wlroots => wlroots::keyboard_keysym(keysym, pressed),
         Route::Portal => portal::session()
-            .map_err(|e| e.message())?
-            .keyboard_keysym(keysym, pressed),
+            .map_err(|e| e.message())
+            .and_then(|session| session.keyboard_keysym(keysym, pressed)),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cleanup_cannot_erase_an_input_failure() {
+        let failure = ActionFailure::default();
+        assert!(failure.record(Err("keymap failed".into())).is_err());
+        assert!(failure.record(Ok(())).is_ok());
+        assert!(failure.record(Err("release failed".into())).is_err());
+        assert_eq!(failure.reason().as_deref(), Some("keymap failed"));
+        failure.clear();
+        assert_eq!(failure.reason(), None);
     }
 }

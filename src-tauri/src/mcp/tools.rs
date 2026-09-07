@@ -209,9 +209,14 @@ fn guard_self_target(app: &tauri::AppHandle, x: f64, y: f64) -> Result<(), McpEr
 /// success — and it would go on reasoning about a state change that never
 /// happened. Refusing loudly costs one retry; lying costs the whole session.
 fn input_ok(msg: String) -> Result<CallToolResult, McpError> {
+    input_delivered()?;
+    ok(msg)
+}
+
+fn input_delivered() -> Result<(), McpError> {
     match input::blocked_reason() {
         Some(why) => Err(fail(format!("the input did not reach its target. {why}"))),
-        None => ok(msg),
+        None => Ok(()),
     }
 }
 
@@ -428,6 +433,7 @@ impl Conduit {
                 if let (Some(x), Some(y)) = (args.x, args.y) {
                     guard_self_target(&self.state.app, x, y)?;
                     input::glide(x, y, |px, py| self.emit_cursor(px, py)).await;
+                    input_delivered()?;
                 } else {
                     // No explicit target: the cursor may already be parked over
                     // conduit from an earlier move, so check where it actually is.
@@ -462,6 +468,7 @@ impl Conduit {
                 if let (Some(x), Some(y)) = (args.from_x, args.from_y) {
                     guard_self_target(&self.state.app, x, y)?;
                     input::glide(x, y, |px, py| self.emit_cursor(px, py)).await;
+                    input_delivered()?;
                 }
                 input::drag(args.to_x, args.to_y, button, |px, py| self.emit_cursor(px, py)).await;
                 input_ok(format!("dragged to {:.0}, {:.0}", args.to_x, args.to_y))
@@ -487,6 +494,7 @@ impl Conduit {
                 if let (Some(x), Some(y)) = (args.x, args.y) {
                     guard_self_target(&self.state.app, x, y)?;
                     input::glide(x, y, |px, py| self.emit_cursor(px, py)).await;
+                    input_delivered()?;
                 }
                 input::scroll(dx, dy);
                 input_ok(format!("scrolled dx {dx}, dy {dy}"))

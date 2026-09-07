@@ -197,6 +197,9 @@ wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 # `zwp_virtual_keyboard_manager_v1`. A separate crate only because it is a
 # staging protocol rather than a wlr one; the compositors are the same.
 wayland-protocols-misc = { version = "0.3", features = ["client"] }
+# Resolve named shortcuts against the compositor's keymap, before our virtual
+# keyboard installs its text map. This preserves physical compositor bindings.
+xkbcommon = { version = "0.9", default-features = false }
 
 libc = "0.2"
 

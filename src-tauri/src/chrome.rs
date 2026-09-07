@@ -265,10 +265,9 @@ pub fn show_control_chrome(app: &AppHandle<Wry>, state: crate::state::ControlSta
         for display in cached_displays() {
             if let Some(w) = app.get_webview_window(&overlay_label(display.index)) {
                 let _ = w.show();
-                // After `show`, never before: on Linux the window has no
-                // `GdkWindow` to attach an empty input region to until it is
-                // realized, and tao unwraps that. Harmless ordering on the
-                // other two, where `create_chrome` already made it inert.
+                // Linux keeps an empty input region on the GTK widget itself
+                // so GTK preserves it across mapping and allocation changes.
+                #[cfg(not(target_os = "linux"))]
                 let _ = w.set_ignore_cursor_events(true);
             }
         }
@@ -451,7 +450,6 @@ mod linux_chrome {
 
     /// `GtkLayerShellKeyboardMode`.
     const KEYBOARD_NONE: c_int = 0;
-    const KEYBOARD_ON_DEMAND: c_int = 2;
 
     #[derive(Clone, Copy)]
     pub enum Role {
@@ -577,11 +575,19 @@ mod linux_chrome {
     }
 
     pub fn configure(window: &WebviewWindow<Wry>, role: Role, display_index: Option<usize>) {
-        let Some(api) = api() else { return };
         let Ok(gtk_window) = window.gtk_window() else {
             tracing::warn!("no gtk window behind {}", window.label());
             return;
         };
+
+        if matches!(role, Role::Overlay) {
+            // Setting only the GdkWindow region (as tao does) is overwritten
+            // when GTK allocates/maps the layer surface. Store an actually
+            // empty region on the widget, including before its first map.
+            gtk_window.input_shape_combine_region(Some(&gtk::cairo::Region::create()));
+        }
+
+        let Some(api) = api() else { return };
 
         let raw: *mut c_void = {
             let as_window: &gtk::Window = gtk_window.upcast_ref();
@@ -600,7 +606,11 @@ mod linux_chrome {
 
             // The namespace is what a compositor matches window rules against,
             // so a user who wants to special-case conduit's glow has a handle.
-            if let Ok(ns) = CString::new("conduit") {
+            let namespace = match role {
+                Role::Overlay => "conduit",
+                Role::Pill => "conduit-pill",
+            };
+            if let Ok(ns) = CString::new(namespace) {
                 (api.set_namespace)(raw, ns.as_ptr());
             }
 
@@ -634,9 +644,11 @@ mod linux_chrome {
                     // there without conduit having to know the panel's height.
                     (api.set_exclusive_zone)(raw, 0);
                     (api.set_margin)(raw, EDGE_BOTTOM, 8);
-                    // On demand, not none: the stop button has to be clickable,
-                    // but the pill must not steal focus by appearing.
-                    (api.set_keyboard_mode)(raw, KEYBOARD_ON_DEMAND);
+                    // Keyboard interactivity does not control pointer input:
+                    // buttons still work with NONE. ON_DEMAND lets Hyprland
+                    // focus the pill as it maps, diverting synthetic typing
+                    // from the target app halfway through an action.
+                    (api.set_keyboard_mode)(raw, KEYBOARD_NONE);
                 }
             }
         }

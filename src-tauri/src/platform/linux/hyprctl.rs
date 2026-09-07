@@ -53,10 +53,61 @@ pub fn rects_for_pid(pid: i32) -> Result<Vec<(f64, f64, f64, f64)>, String> {
     let clients: Vec<Client> = serde_json::from_str(&String::from_utf8_lossy(&output.stdout))
         .map_err(|e| format!("could not parse hyprctl's reply: {e}"))?;
 
-    Ok(clients
+    let mut rects: Vec<_> = clients
         .into_iter()
         .filter(|c| c.pid == pid && c.mapped && !c.hidden)
         .filter(|c| c.size.0 >= 1.0 && c.size.1 >= 1.0)
         .map(|c| (c.at.0, c.at.1, c.size.0, c.size.1))
+        .collect();
+
+    // Layer surfaces are absent from `clients`. Only the interactive pill is
+    // protected: the full-screen, click-through glow must not block every point.
+    let layers = Command::new("hyprctl")
+        .args(["layers", "-j"])
+        .output()
+        .map_err(|e| format!("could not run hyprctl layers: {e}"))?;
+    if !layers.status.success() {
+        return Err(format!("hyprctl layers exited with {}", layers.status));
+    }
+    rects.extend(pill_rects(&layers.stdout, pid)?);
+    Ok(rects)
+}
+
+fn pill_rects(bytes: &[u8], pid: i32) -> Result<Vec<(f64, f64, f64, f64)>, String> {
+    #[derive(Deserialize)]
+    struct Layer {
+        namespace: String,
+        pid: i32,
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+    }
+    #[derive(Deserialize)]
+    struct Monitor {
+        levels: std::collections::HashMap<String, Vec<Layer>>,
+    }
+    let monitors: std::collections::HashMap<String, Monitor> = serde_json::from_slice(bytes)
+        .map_err(|e| format!("could not parse hyprctl layers: {e}"))?;
+    Ok(monitors.into_values()
+        .flat_map(|m| m.levels.into_values().flatten())
+        .filter(|l| l.pid == pid && l.namespace == "conduit-pill" && l.w > 0.0 && l.h > 0.0)
+        .map(|l| (l.x, l.y, l.w, l.h))
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn protects_the_pill_without_guarding_the_click_through_overlay() {
+        let layers = br#"{"DP-1":{"levels":{"3":[
+            {"namespace":"conduit","pid":42,"x":0,"y":0,"w":2560,"h":1440},
+            {"namespace":"conduit-pill","pid":42,"x":1040,"y":1132,"w":480,"h":300},
+            {"namespace":"conduit-pill","pid":99,"x":0,"y":0,"w":480,"h":300}
+        ]}}}"#;
+        assert_eq!(pill_rects(layers, 42).unwrap(), vec![(1040.0, 1132.0, 480.0, 300.0)]);
+        assert!(pill_rects(b"invalid", 42).is_err());
+    }
 }

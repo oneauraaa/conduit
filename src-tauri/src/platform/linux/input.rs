@@ -98,6 +98,7 @@ fn move_to(x: f64, y: f64) -> Result<(), String> {
 /// all. `on_step` receives every intermediate point so the overlay draws the
 /// trail in lockstep.
 pub async fn glide(to_x: f64, to_y: f64, mut on_step: impl FnMut(f64, f64)) {
+    sink::begin_action();
     let (from_x, from_y) = cursor_position();
 
     for (x, y) in tween::path(from_x, from_y, to_x, to_y) {
@@ -121,6 +122,7 @@ pub async fn glide(to_x: f64, to_y: f64, mut on_step: impl FnMut(f64, f64)) {
 /// compositor's double-click interval *are* a double-click here, which is why
 /// the gap below is short and fixed rather than merely "comfortably inside" it.
 pub async fn click(button: Button, count: i64) {
+    sink::begin_action();
     let code = button.evdev();
 
     for n in 1..=count {
@@ -143,6 +145,7 @@ pub async fn click(button: Button, count: i64) {
 
 /// Press, glide, release — the sequence sliders and drag-and-drop expect.
 pub async fn drag(to_x: f64, to_y: f64, button: Button, on_step: impl FnMut(f64, f64)) {
+    sink::begin_action();
     let code = button.evdev();
 
     if sink::pointer_button(code, true).is_err() {
@@ -165,6 +168,7 @@ pub async fn drag(to_x: f64, to_y: f64, button: Button, on_step: impl FnMut(f64,
 /// — so pixels are converted to detents here. [`PIXELS_PER_DETENT`] matches the
 /// conventional 15° step most toolkits treat as "three lines".
 pub fn scroll(dx: i32, dy: i32) {
+    sink::begin_action();
     const PIXELS_PER_DETENT: i32 = 50;
 
     // Magnitude first, sign last. Dividing a negative straight through and
@@ -200,19 +204,27 @@ pub fn scroll(dx: i32, dy: i32) {
 /// rather than scancodes are what make this correct on a Turkish or Japanese
 /// keyboard.
 pub async fn type_text(text: &str) {
-    for (i, c) in text.chars().enumerate() {
-        let sym = keycodes::keysym_for_char(c);
-        if sink::keyboard_keysym(sym, true).is_err() {
-            return;
-        }
-        if sink::keyboard_keysym(sym, false).is_err() {
-            return;
-        }
+    sink::begin_action();
+    let mut remaining = text;
+    while !remaining.is_empty() {
+        let Ok(end) = sink::prepare_text(remaining) else { return };
+        for (i, c) in remaining[..end].chars().enumerate() {
+            let sym = keycodes::keysym_for_char(c);
+            if sink::keyboard_keysym(sym, true).is_err() {
+                return;
+            }
+            if sink::keyboard_keysym(sym, false).is_err() {
+                return;
+            }
 
-        // A human-ish cadence, and it gives slower text fields time to keep up.
-        // Yielded every few characters rather than every one, so a long string
-        // does not spend all its time in the scheduler.
-        if i % 4 == 3 {
+            // Give slower text fields time to consume queued key events.
+            if i % 4 == 3 {
+                tokio::time::sleep(Duration::from_millis(12)).await;
+            }
+        }
+        remaining = &remaining[end..];
+        if !remaining.is_empty() {
+            // Let the last events in this map drain before recycling codes.
             tokio::time::sleep(Duration::from_millis(12)).await;
         }
     }
@@ -226,14 +238,13 @@ pub async fn type_text(text: &str) {
 /// down for every subsequent keystroke on the machine. That is why the releases
 /// run even when the main key fails.
 pub fn key_press(key: &str, modifiers: &[String]) -> Result<(), String> {
+    sink::begin_action();
     let code = keycodes::lookup(key).ok_or_else(|| format!("unknown key: {key}"))?;
     let mods = keycodes::modifier_keysyms(modifiers)?;
+    sink::prepare_key(code as i32)?;
 
-    for m in &mods {
-        sink::keyboard_keysym(*m, true)?;
-    }
-
-    let result = sink::keyboard_keysym(code as i32, true)
+    let result = mods.iter().try_for_each(|m| sink::keyboard_keysym(*m, true))
+        .and_then(|_| sink::keyboard_keysym(code as i32, true))
         .and_then(|_| sink::keyboard_keysym(code as i32, false));
 
     for m in mods.iter().rev() {

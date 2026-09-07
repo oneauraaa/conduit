@@ -56,13 +56,13 @@
 //! applications see as one.
 
 use std::collections::HashMap;
-use std::io::Write;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::fd::{AsFd, FromRawFd, OwnedFd};
 use std::sync::OnceLock;
 use std::time::Instant;
 
 use parking_lot::Mutex;
-use wayland_client::protocol::{wl_output, wl_registry, wl_seat};
+use wayland_client::protocol::{wl_keyboard, wl_output, wl_registry, wl_seat};
 use wayland_client::{Connection, Dispatch, EventQueue, QueueHandle, delegate_noop};
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
     zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1,
@@ -86,14 +86,22 @@ const XKB_MIN: u32 = 8;
 const XKB_MAX: u32 = 255;
 
 /// The four modifiers get fixed keycodes so a shortcut never has to wait for a
-/// keymap upload, and so [`reset_dynamic`] can recycle everything else without
+/// keymap upload, and so the dynamic pool can recycle everything else without
 /// ever pulling a held modifier out from under a keypress.
-const KC_SHIFT: u32 = XKB_MIN + 1;
-const KC_CONTROL: u32 = XKB_MIN + 2;
-const KC_ALT: u32 = XKB_MIN + 3;
-const KC_SUPER: u32 = XKB_MIN + 4;
+const KC_SHIFT: u32 = 50;
+const KC_CONTROL: u32 = 37;
+const KC_ALT: u32 = 64;
+const KC_SUPER: u32 = 133;
 /// Where the keysym pool starts, just past the modifiers.
-const KC_DYNAMIC: u32 = XKB_MIN + 5;
+const KC_DYNAMIC: u32 = 10;
+
+/// Ordinary typing positions in the evdev XKB map. Hyprland can resolve binds
+/// against its physical layout even for a virtual keyboard with its own map.
+/// Allocating media/lock/function codes therefore turns arbitrary Unicode into
+/// volume, brightness or launcher shortcuts. Keep codes below 256 for XWayland.
+fn typing_keycode(code: u32) -> bool {
+    matches!(code, 10..=21 | 24..=35 | 38..=49 | 51..=61 | 65)
+}
 
 /* ── the connection ─────────────────────────────────────────── */
 
@@ -113,6 +121,7 @@ struct Globals {
     pointer_version: u32,
     keyboard_manager: Option<ZwpVirtualKeyboardManagerV1>,
     seat: Option<wl_seat::WlSeat>,
+    native_keymap: Option<String>,
     outputs: Vec<Output>,
 }
 
@@ -133,6 +142,7 @@ struct Backend {
     /// second monitor genuinely needs a second device.
     pointers: Mutex<HashMap<usize, ZwlrVirtualPointerV1>>,
     keymap: Mutex<Keymap>,
+    native_keycodes: HashMap<i32, u32>,
 }
 
 // None of these four ever send an event conduit acts on. The managers are
@@ -181,8 +191,11 @@ impl Dispatch<wl_registry::WlRegistry, ()> for Globals {
                 // people driving it is not one an agent should be let loose on
                 // anyway, and picking the first is what every other tool does.
                 if state.seat.is_none() {
-                    state.seat =
-                        Some(registry.bind::<wl_seat::WlSeat, _, _>(name, version.min(7), qh, ()));
+                    let seat = registry.bind::<wl_seat::WlSeat, _, _>(name, version.min(7), qh, ());
+                    // The initial map arrives before creating our virtual
+                    // keyboard. No surface or keyboard grab is needed.
+                    seat.get_keyboard(qh, ());
+                    state.seat = Some(seat);
                 }
             }
             "wl_output" => {
@@ -195,6 +208,68 @@ impl Dispatch<wl_registry::WlRegistry, ()> for Globals {
             _ => {}
         }
     }
+}
+
+impl Dispatch<wl_keyboard::WlKeyboard, ()> for Globals {
+    fn event(
+        state: &mut Self,
+        _: &wl_keyboard::WlKeyboard,
+        event: wl_keyboard::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if state.native_keymap.is_some() {
+            return;
+        }
+        if let wl_keyboard::Event::Keymap { fd, size, .. } = event {
+            let mut text = String::new();
+            // The protocol does not promise that the descriptor's file
+            // offset starts at zero.  Hyprland hands us a memfd whose offset
+            // is already at EOF; reading without rewinding therefore looked
+            // like a valid, empty keymap and silently disabled named keys.
+            let mut file = std::fs::File::from(fd);
+            if file.seek(SeekFrom::Start(0)).is_ok()
+                && file.take(u64::from(size)).read_to_string(&mut text).is_ok()
+                && !text.trim_matches('\0').trim().is_empty()
+            {
+                state.native_keymap = Some(text.trim_end_matches('\0').to_owned());
+            }
+        }
+    }
+}
+
+fn native_keycodes(text: &str) -> Result<HashMap<i32, u32>, String> {
+    use xkbcommon::xkb;
+    let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+    let map = xkb::Keymap::new_from_string(
+        &context,
+        text.to_owned(),
+        xkb::KEYMAP_FORMAT_TEXT_V1,
+        xkb::KEYMAP_COMPILE_NO_FLAGS,
+    )
+    .or_else(|| {
+        xkb::Keymap::new_from_string(
+            &context,
+            text.to_owned(),
+            2,
+            xkb::KEYMAP_COMPILE_NO_FLAGS,
+        )
+    })
+    .ok_or_else(|| {
+        let prefix: String = text.chars().take(96).collect();
+        format!(
+            "could not compile the compositor's keyboard map ({} bytes, starts with {:?})",
+            text.len(), prefix
+        )
+    })?;
+    let mut codes = HashMap::new();
+    map.key_for_each(|map, code| {
+        for sym in map.key_get_syms_by_level(code, 0, 0) {
+            codes.entry(sym.raw() as i32).or_insert(code.raw());
+        }
+    });
+    Ok(codes)
 }
 
 impl Dispatch<wl_output::WlOutput, ()> for Globals {
@@ -223,8 +298,8 @@ impl Dispatch<wl_output::WlOutput, ()> for Globals {
 
 /// Why this route is unusable, if it is.
 ///
-/// Only ever "the compositor does not offer it" — there is no consent step to
-/// fail and no session to lose, which is the whole advantage over the portal.
+/// Initialization is cached; a lost compositor connection requires a restart.
+/// Runtime health is checked separately by `unavailable_reason`.
 static INIT: OnceLock<Result<Backend, String>> = OnceLock::new();
 
 fn backend() -> Result<&'static Backend, String> {
@@ -243,7 +318,7 @@ pub fn available() -> bool {
 
 /// The reason this route is unavailable, for the readiness card.
 pub fn unavailable_reason() -> Option<String> {
-    backend().err()
+    backend().and_then(Backend::synchronize).err()
 }
 
 fn connect() -> Result<Backend, String> {
@@ -289,22 +364,29 @@ fn connect() -> Result<Backend, String> {
                         inject input into.".to_string())?;
 
     let keyboard = keyboard_manager.create_virtual_keyboard(&seat, &qh, ());
+    let native_keycodes = globals.native_keymap.as_deref()
+        .map(native_keycodes).transpose()?.unwrap_or_default();
 
     let backend = Backend {
         conn: conn.clone(),
         qh,
-        pump: Mutex::new((queue, globals)),
         pointer_manager,
         pointer_version: globals.pointer_version,
+        pump: Mutex::new((queue, globals)),
         seat,
         keyboard,
         pointers: Mutex::new(HashMap::new()),
         keymap: Mutex::new(Keymap::new()),
+        native_keycodes,
     };
 
     // A keyboard with no keymap is a protocol error the moment a key is sent,
     // so the first upload happens here rather than on the first keystroke.
-    backend.upload_keymap()?;
+    {
+        let mut keymap = backend.keymap.lock();
+        backend.upload_keymap(&keymap)?;
+        keymap.take_dirty();
+    }
 
     tracing::info!("wlroots virtual input is available; using it instead of the portal");
     Ok(backend)
@@ -321,6 +403,18 @@ fn now_ms() -> u32 {
 }
 
 impl Backend {
+    /// Read replies at readiness/action boundaries so an asynchronous protocol
+    /// refusal cannot masquerade as successful input. Also dispatches output
+    /// geometry updates; flushing alone never reads the compositor's replies.
+    fn synchronize(&self) -> Result<(), String> {
+        let mut pump = self.pump.lock();
+        let (queue, globals) = &mut *pump;
+        queue
+            .roundtrip(globals)
+            .map(|_| ())
+            .map_err(|e| format!("the wayland input connection failed: {e}. restart conduit to reconnect"))
+    }
+
     /// Pushes queued requests to the compositor.
     ///
     /// Every public entry point ends in one of these. Without it a request sits
@@ -334,7 +428,7 @@ impl Backend {
         if let Some(e) = self.conn.protocol_error() {
             return Err(format!(
                 "the compositor refused a virtual-input request: {} (interface {}, code {})",
-                e.message, e.interface, e.code
+                e.message, e.object_interface, e.code
             ));
         }
         self.conn
@@ -446,6 +540,38 @@ const UNBOUND: usize = usize::MAX;
 
 /* ── the surface `sink` calls ───────────────────────────────── */
 
+pub fn prepare_key(keysym: i32) -> Result<(), String> {
+    if matches!(keysym, keycodes::SHIFT | keycodes::CONTROL | keycodes::ALT | keycodes::SUPER) {
+        return Ok(());
+    }
+    let backend = backend()?;
+    let code = *backend.native_keycodes.get(&keysym)
+        .ok_or_else(|| "this named key has no unshifted position in the compositor's keyboard map".to_owned())?;
+    let mut map = backend.keymap.lock();
+    if !map.held.is_empty() {
+        return Err("cannot prepare a shortcut while keys are held down".into());
+    }
+    map.slots.retain(|_, assigned| *assigned != code);
+    map.slots.insert(keysym, code);
+    map.dirty = true;
+    backend.upload_keymap(&map)?;
+    map.take_dirty();
+    Ok(())
+}
+
+/// Preload a whole prefix before typing it. Replacing a keymap for every new
+/// character can outrun the receiving toolkit and lose input during reloads.
+pub fn prepare_text(text: &str) -> Result<usize, String> {
+    let backend = backend()?;
+    let mut keymap = backend.keymap.lock();
+    let end = keymap.prepare_text(text)?;
+    if keymap.dirty {
+        backend.upload_keymap(&keymap)?;
+        keymap.take_dirty();
+    }
+    Ok(end)
+}
+
 pub fn pointer_motion_absolute(x: f64, y: f64) -> Result<(), String> {
     let backend = backend()?;
     let target = backend.pointer_for(x, y)?;
@@ -521,13 +647,14 @@ pub fn pointer_axis_discrete(axis: u32, steps: i32) -> Result<(), String> {
 pub fn keyboard_keysym(keysym: i32, pressed: bool) -> Result<(), String> {
     let backend = backend()?;
 
-    let (code, upload) = {
-        let mut keymap = backend.keymap.lock();
-        let code = keymap.keycode_for(keysym, pressed)?;
-        (code, keymap.take_dirty())
-    };
-    if upload {
-        backend.upload_keymap()?;
+    // Keep allocation, upload and the referring event together. Another input
+    // call must not replace the map between choosing a code and sending it.
+    let mut keymap = backend.keymap.lock();
+    let code = keymap.keycode_for(keysym, pressed)?;
+    if keymap.dirty {
+        backend.upload_keymap(&keymap)?;
+        keymap.take_dirty();
+        backend.keyboard.modifiers(keymap.depressed_modifiers(), 0, 0, 0);
     }
 
     // The protocol's `key` is an evdev code, which is the xkb keycode less the
@@ -536,6 +663,9 @@ pub fn keyboard_keysym(keysym: i32, pressed: bool) -> Result<(), String> {
     backend
         .keyboard
         .key(now_ms(), code - XKB_MIN, u32::from(pressed));
+    // Virtual keyboards do not derive modifier state from key events. Send it
+    // explicitly, including zero after release and after any keymap upload.
+    backend.keyboard.modifiers(keymap.depressed_modifiers(), 0, 0, 0);
     backend.flush()
 }
 
@@ -544,10 +674,8 @@ pub fn keyboard_keysym(keysym: i32, pressed: bool) -> Result<(), String> {
 /// conduit's own keymap: one keysym per keycode, at level 1.
 ///
 /// See the module header for why this shape. The map grows as new keysyms are
-/// asked for and is re-uploaded when it does, which for ordinary text happens
-/// only on the first few keystrokes — the seed below covers everything an
-/// English keyboard can reach, so the re-upload path exists for the `こんにちは`
-/// case rather than the common one.
+/// asked for. Text preloads the longest prefix that fits the ordinary typing
+/// positions, then sends it without changing the map between characters.
 struct Keymap {
     /// keysym → xkb keycode, for the pool past the modifiers.
     slots: HashMap<i32, u32>,
@@ -561,32 +689,45 @@ struct Keymap {
 }
 
 impl Keymap {
+    /// Byte boundary of the longest prefix that fits one stable keymap.
+    fn prepare_text(&mut self, text: &str) -> Result<usize, String> {
+        if !self.held.is_empty() {
+            return Err("cannot prepare text while keys are held down".into());
+        }
+        for (offset, c) in text.char_indices() {
+            let sym = keycodes::keysym_for_char(c);
+            if self.assign(sym).is_err() {
+                if offset > 0 {
+                    return Ok(offset);
+                }
+                self.slots.clear();
+                self.next = KC_DYNAMIC;
+                self.assign(sym)?;
+            }
+        }
+        Ok(text.len())
+    }
+
+    /// Core XKB modifier bits used by the `complete` types in our keymap.
+    fn depressed_modifiers(&self) -> u32 {
+        self.held.iter().fold(0, |mask, sym| {
+            mask | match *sym {
+                keycodes::SHIFT => 1,
+                keycodes::CONTROL => 4,
+                keycodes::ALT => 8,
+                keycodes::SUPER => 64,
+                _ => 0,
+            }
+        })
+    }
+
     fn new() -> Self {
-        let mut map = Keymap {
+        Keymap {
             slots: HashMap::new(),
             next: KC_DYNAMIC,
             dirty: true,
             held: Vec::new(),
-        };
-        // Everything a US keyboard can type, seeded up front so that ordinary
-        // text never pays for a keymap upload mid-word.
-        for sym in 0x20..=0x7e {
-            let _ = map.assign(sym);
         }
-        // The named keys `keycodes::lookup` can return, minus the modifiers,
-        // which have fixed codes. Same reason: `key_press("return")` should not
-        // be the call that recompiles a keymap.
-        for sym in [
-            0xff08, 0xff09, 0xff0d, 0xff1b, 0xff50, 0xff51, 0xff52, 0xff53, 0xff54, 0xff55,
-            0xff56, 0xff57, 0xffff,
-        ] {
-            let _ = map.assign(sym);
-        }
-        // F1–F12.
-        for sym in 0xffbe..=0xffc9 {
-            let _ = map.assign(sym);
-        }
-        map
     }
 
     /// Whether the compositor needs a fresh copy, clearing the flag.
@@ -597,6 +738,9 @@ impl Keymap {
     fn assign(&mut self, keysym: i32) -> Result<u32, String> {
         if let Some(code) = self.slots.get(&keysym) {
             return Ok(*code);
+        }
+        while self.next <= XKB_MAX && (!typing_keycode(self.next) || self.slots.values().any(|code| *code == self.next)) {
+            self.next += 1;
         }
         if self.next > XKB_MAX {
             return Err("the keymap is full".into());
@@ -623,10 +767,9 @@ impl Keymap {
             _ => match self.assign(keysym) {
                 Ok(code) => code,
                 Err(_) => {
-                    // 247 distinct keysyms in one session is a very long stretch
-                    // of text in a script with no repeats. Start the pool over
-                    // rather than refusing to type.
-                    if !self.held.is_empty() {
+                    // Fixed modifier codes survive recycling. A held dynamic
+                    // key must retain its mapping until it is released.
+                    if self.held.iter().any(|sym| self.slots.contains_key(sym)) {
                         return Err(
                             "the keymap is full while keys are still held down".into()
                         );
@@ -708,8 +851,8 @@ impl Backend {
     /// Through a `memfd` rather than a file in `/tmp`: the compositor mmaps
     /// what it is given, and an anonymous descriptor cannot be read, replaced
     /// or left behind by anything else on the machine.
-    fn upload_keymap(&self) -> Result<(), String> {
-        let text = self.keymap.lock().to_xkb();
+    fn upload_keymap(&self, keymap: &Keymap) -> Result<(), String> {
+        let text = keymap.to_xkb();
         // The size the compositor mmaps includes the terminating NUL, and
         // xkbcommon reads the buffer as a C string. One byte short and the
         // keymap fails to compile with no useful message on either side.
@@ -763,18 +906,90 @@ fn memfd(bytes: &[u8]) -> Result<std::fs::File, String> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn named_keys_use_the_compositors_layout() {
+        let map = r#"xkb_keymap {
+            xkb_keycodes "test" { minimum=8; maximum=255; <A>=38; <F12>=96; };
+            xkb_types "test" { include "complete" };
+            xkb_compatibility "test" { include "complete" };
+            xkb_symbols "test" { key <A> { [ a ] }; key <F12> { [ F12 ] }; };
+        };"#;
+        let codes = native_keycodes(map).unwrap();
+        assert_eq!(codes.get(&('a' as i32)), Some(&38));
+        assert_eq!(codes.get(&0xffc9), Some(&96));
+    }
+
+    /// Creates no input events and closes only this test's private connection.
+    #[test]
+    #[ignore = "requires a running compositor with both virtual-input protocols"]
+    fn a_lost_connection_is_reported_after_successful_initialization() {
+        use std::os::fd::AsRawFd;
+        let backend = connect().expect("virtual input must be available");
+        backend.synchronize().unwrap();
+        let connection = backend.conn.backend();
+        // SAFETY: the descriptor belongs to this test's live connection. The
+        // Wayland owner still closes it; shutdown only simulates a disconnect.
+        assert_eq!(unsafe { libc::shutdown(connection.poll_fd().as_raw_fd(), libc::SHUT_RDWR) }, 0);
+        assert!(backend.synchronize().unwrap_err().contains("restart conduit"));
+        assert!(backend.flush().is_err());
+    }
+
+    #[test]
+    fn modifier_state_tracks_chords_and_releases() {
+        let mut map = Keymap::new();
+        assert_eq!(map.depressed_modifiers(), 0);
+        map.keycode_for(keycodes::CONTROL, true).unwrap();
+        assert_eq!(map.depressed_modifiers(), 4);
+        map.keycode_for(keycodes::SHIFT, true).unwrap();
+        map.keycode_for('a' as i32, true).unwrap();
+        assert_eq!(map.depressed_modifiers(), 5);
+        map.keycode_for('a' as i32, false).unwrap();
+        map.keycode_for(keycodes::CONTROL, false).unwrap();
+        assert_eq!(map.depressed_modifiers(), 1);
+        map.keycode_for(keycodes::SHIFT, false).unwrap();
+        assert_eq!(map.depressed_modifiers(), 0);
+        map.keycode_for(keycodes::ALT, true).unwrap();
+        map.keycode_for(keycodes::SUPER, true).unwrap();
+        assert_eq!(map.depressed_modifiers(), 8 | 64);
+    }
+
+    #[test]
+    fn unicode_batches_keep_the_keymap_stable_until_all_keys_are_released() {
+        let text: String = (0x4e00..0x4e00 + 300).map(|c| char::from_u32(c).unwrap()).collect();
+        let mut remaining = text.as_str();
+        let mut map = Keymap::new();
+        let mut chunks = 0;
+        while !remaining.is_empty() {
+            let end = map.prepare_text(remaining).unwrap();
+            assert!(end > 0 && remaining.is_char_boundary(end));
+            map.take_dirty();
+            for c in remaining[..end].chars() {
+                let sym = keycodes::keysym_for_char(c);
+                let down = map.keycode_for(sym, true).unwrap();
+                assert!(map.prepare_text("next").is_err());
+                assert_eq!(map.keycode_for(sym, false).unwrap(), down);
+                assert!(!map.take_dirty());
+            }
+            remaining = &remaining[end..];
+            chunks += 1;
+        }
+        assert!(chunks > 1);
+    }
+
     /// The keymap has to compile. Every keystroke this backend sends is a
     /// keycode that means nothing without it, so a keymap that xkbcommon
     /// rejects is not a degraded state — it is a keyboard that types garbage
     /// into whatever the user had focused.
     #[test]
-    fn the_seeded_keymap_is_valid_xkb() {
-        let text = Keymap::new().to_xkb();
+    fn the_keymap_contains_modifiers_and_prepared_symbols() {
+        let mut map = Keymap::new();
+        map.prepare_text("a~").unwrap();
+        let text = map.to_xkb();
         // The four modifiers, with the mapping that makes `cmd+c` a real
         // Control press rather than a lone unmodified `c`.
         assert!(text.contains("modifier_map Control { <control> };"), "{text}");
         assert!(text.contains("modifier_map Mod4 { <super> };"), "{text}");
-        // Printable ASCII is seeded, so ordinary typing never re-uploads.
+        // Prepared characters use exact keysyms.
         assert!(text.contains("[ 0x00000061 ]"), "{text}");
         assert!(text.contains("[ 0x0000007e ]"), "{text}");
     }
@@ -830,13 +1045,25 @@ mod tests {
     /// The seed exists to keep ordinary typing off the upload path. If it stops
     /// covering ASCII, every English keystroke starts recompiling a keymap.
     #[test]
-    fn typing_ascii_never_dirties_the_keymap() {
+    fn prepared_ascii_never_dirties_the_keymap() {
         let mut map = Keymap::new();
+        assert_eq!(map.prepare_text("Hello, world! (1+2=3)").unwrap(), "Hello, world! (1+2=3)".len());
         map.take_dirty();
         for c in "Hello, world! (1+2=3)".chars() {
             map.keycode_for(keycodes::keysym_for_char(c), true).unwrap();
             map.keycode_for(keycodes::keysym_for_char(c), false).unwrap();
         }
         assert!(!map.take_dirty());
+    }
+
+    #[test]
+    fn dynamic_codes_avoid_physical_modifier_lock_and_media_keys() {
+        let mut map = Keymap::new();
+        for sym in 0x1004e00..0x1004e00 + 300 {
+            let code = map.keycode_for(sym, true).unwrap();
+            assert!(code <= 65);
+            assert!(![37, 50, 62, 64, 66, 77, 78].contains(&code));
+            map.keycode_for(sym, false).unwrap();
+        }
     }
 }
