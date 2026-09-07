@@ -13,7 +13,7 @@ Expose a free, keyless DuckDuckGo web-search tool through Conduit's MCP endpoint
 
 - One read-only MCP tool named `web_search`.
 - A required query string and an optional bounded result count.
-- DuckDuckGo's public HTML results endpoint, requested with a normal user agent.
+- DuckDuckGo's public Lite HTML results endpoint, requested with a normal user agent.
 - Structured results containing title, URL, and snippet text.
 - Clear errors for empty queries, invalid result counts, network failures, non-success HTTP responses, malformed result pages, and rate limiting.
 - Tool catalog, action labels, approval policy, standalone preview data, and unit tests updated with the new tool.
@@ -30,7 +30,7 @@ Expose a free, keyless DuckDuckGo web-search tool through Conduit's MCP endpoint
 
 The MCP handler remains thin and runs through the existing `gate::run` policy so the search appears in the server log and obeys the user's tool toggle. A small `web_search` platform-independent module owns the network request and HTML parsing; it returns a serializable `SearchResult` list and maps failures to user-readable strings.
 
-The handler executes the blocking HTTP/parser work with `tokio::task::spawn_blocking`, keeping the MCP runtime responsive. The request URL is built with a URL-encoding helper, uses a short timeout, and asks for at most ten results. The parser extracts DuckDuckGo result anchors and snippets from the public HTML structure, normalizes relative result URLs, decodes entities, and skips malformed entries rather than returning invented data.
+The handler executes the blocking HTTP/parser work with `tokio::task::spawn_blocking`, keeping the MCP runtime responsive. The request URL is built with a URL-encoding helper, uses a short timeout, and asks for at most ten results. The parser extracts DuckDuckGo Lite result anchors and snippets from the public HTML structure, follows only DuckDuckGo's result redirect format to recover the destination URL, decodes entities, and skips malformed entries rather than returning invented data.
 
 ## Tool contract
 
@@ -46,8 +46,9 @@ web_search(query: string, max_results?: integer) ->
 
 ## Error handling
 
-- HTTP 403, 202, 429, or other non-success responses become a concise error naming DuckDuckGo and the status; no HTML body is returned.
+- HTTP 403, 429, or other non-2xx responses become a concise error naming DuckDuckGo and the status; the Lite endpoint's normal 2xx response is accepted even when its status is 202.
 - A transport or timeout error reports that DuckDuckGo could not be reached and preserves the original cause for logs.
+- A challenge/CAPTCHA page is reported as a rate-limit/anti-bot error; Conduit never attempts to solve or bypass it.
 - A page with no parseable result entries is treated as an empty result set unless the response is non-success; this avoids turning a normal no-results page into a false failure.
 - The tool never retries automatically, never follows arbitrary redirects beyond the HTTP client's normal policy, and never executes returned content.
 
