@@ -16,7 +16,7 @@
 use wl_clipboard_rs::copy::{self, MimeSource, Options, Source};
 use wl_clipboard_rs::paste::{self, ClipboardType, Seat};
 
-pub fn read_text() -> Option<String> {
+fn read_wlr_text() -> Option<String> {
     // `text/plain;charset=utf-8` first, falling back to whatever text the owner
     // offers — some applications advertise only `TEXT` or `STRING`.
     let result = paste::get_contents(
@@ -46,7 +46,7 @@ pub fn read_text() -> Option<String> {
     }
 }
 
-pub fn write_text(text: &str) -> Result<(), String> {
+fn write_wlr_text(text: &str) -> Result<(), String> {
     // Deliberately *not* `foreground(true)`. Wayland has no clipboard store:
     // the copying client owns the selection and must stay alive to serve it,
     // so `copy` leaves something running either way. In the default mode that
@@ -68,6 +68,28 @@ pub fn write_text(text: &str) -> Result<(), String> {
                  have but gnome does not."
             )
         })
+}
+
+/// Reads the clipboard through the mechanism supported by this compositor.
+/// wlroots uses data-control; GNOME and KDE use the portal session's clipboard
+/// extension, so clipboard access follows the same consent boundary as input.
+pub fn read_text() -> Result<Option<String>, String> {
+    match super::sink::route() {
+        super::sink::Route::Wlroots => Ok(read_wlr_text()),
+        super::sink::Route::Portal => super::portal::session()
+            .map_err(|error| error.message())
+            .and_then(|session| session.clipboard_read_text()),
+    }
+}
+
+/// Writes text through the mechanism supported by this compositor.
+pub fn write_text(text: &str) -> Result<(), String> {
+    match super::sink::route() {
+        super::sink::Route::Wlroots => write_wlr_text(text),
+        super::sink::Route::Portal => super::portal::session()
+            .map_err(|error| error.message())?
+            .clipboard_write_text(text),
+    }
 }
 
 #[allow(dead_code)]

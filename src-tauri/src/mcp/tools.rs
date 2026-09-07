@@ -752,7 +752,7 @@ impl Conduit {
             &self.state,
             CallCtx { tool: "clipboard_read", detail: None, agent },
             || async {
-                match clipboard::read_text() {
+                match clipboard::read_text().map_err(fail)? {
                     Some(text) => ok(text),
                     None => ok("the clipboard holds no text"),
                 }

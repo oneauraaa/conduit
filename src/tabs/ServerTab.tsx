@@ -587,7 +587,9 @@ function LinuxReadiness({
         description={
           state.windowManagement
             ? "kwin is here, so windows can be listed, moved and focused"
-            : `no wayland protocol lets one app read or move another's windows, and ${state.desktop} exposes no alternative. those three tools are unavailable; everything else works.`
+            : state.wayland && state.desktop.toLowerCase().includes("gnome")
+              ? "unsupported on GNOME Wayland — GNOME does not expose window control to other apps, and conduit does not require or install an extension. screenshots, clicking, typing and screen text still work."
+              : `no wayland protocol lets one app read or move another's windows, and ${state.desktop} exposes no alternative. those three tools are unavailable; everything else works.`
         }
       >
         {state.windowManagement && (

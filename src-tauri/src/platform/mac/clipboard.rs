@@ -3,9 +3,9 @@
 use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString};
 use objc2_foundation::NSString;
 
-pub fn read_text() -> Option<String> {
+pub fn read_text() -> Result<Option<String>, String> {
     let pb = NSPasteboard::generalPasteboard();
-    unsafe { pb.stringForType(NSPasteboardTypeString) }.map(|s| s.to_string())
+    Ok(unsafe { pb.stringForType(NSPasteboardTypeString) }.map(|s| s.to_string()))
 }
 
 pub fn write_text(text: &str) -> Result<(), String> {

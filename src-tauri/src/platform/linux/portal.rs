@@ -5,7 +5,7 @@
 //! sanctioned way through it is `xdg-desktop-portal`: the user consents once,
 //! the compositor does the work, and the app never touches the hardware.
 //!
-//! ## Why RemoteDesktop and ScreenCast are one session
+//! ## Why RemoteDesktop and ScreenCast are one session on the portal route
 //!
 //! They could be two. They must not be, for a reason that is easy to miss:
 //! `NotifyPointerMotionAbsolute` takes a **stream id**, and streams only exist
@@ -17,6 +17,11 @@
 //! difference between clicking the button and clicking near it.
 //!
 //! Binding them together also means one consent dialog instead of two.
+//!
+//! A wlroots compositor is different. Its virtual pointer and virtual keyboard
+//! provide input without RemoteDesktop, so [`connect`] creates a ScreenCast-only
+//! session there. That keeps capture working without asking a portal backend for
+//! an interface Hyprland and the other wlroots desktops do not implement.
 //!
 //! ## The dialog comes back every launch, and cannot not
 //!
@@ -52,7 +57,10 @@
 //! attached afterwards waits forever for a signal that already went past.
 
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, OwnedFd, RawFd};
+use std::sync::Arc;
 
 use parking_lot::{Mutex, RwLock};
 use zbus::blocking::{Connection, Proxy};
@@ -62,9 +70,22 @@ const PORTAL_DEST: &str = "org.freedesktop.portal.Desktop";
 const PORTAL_PATH: &str = "/org/freedesktop/portal/desktop";
 const REMOTE_DESKTOP: &str = "org.freedesktop.portal.RemoteDesktop";
 const SCREEN_CAST: &str = "org.freedesktop.portal.ScreenCast";
+const CLIPBOARD: &str = "org.freedesktop.portal.Clipboard";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionMode {
+    /// Screen capture only. wlroots input is supplied by the virtual devices.
+    CaptureOnly,
+    /// RemoteDesktop supplies input and ScreenCast supplies capture.
+    RemoteControl,
+}
 
 type Options = HashMap<String, Value<'static>>;
 type Results = HashMap<String, OwnedValue>;
+
+struct ClipboardState {
+    data: Mutex<Vec<u8>>,
+}
 
 /* ── what a live session exposes ──────────────────────────────── */
 
@@ -108,15 +129,29 @@ pub enum PortalError {
 
 impl PortalError {
     pub fn message(&self) -> String {
+        let capture_only = matches!(session_mode(), SessionMode::CaptureOnly);
+        self.message_for_mode(capture_only)
+    }
+
+    fn message_for_mode(&self, capture_only: bool) -> String {
         match self {
             PortalError::Missing(e) => format!(
                 "xdg-desktop-portal is not answering on the session bus ({e}). install \
                  xdg-desktop-portal and the backend for your desktop \
                  (xdg-desktop-portal-kde on plasma), then log back in."
             ),
+            PortalError::Denied if capture_only => "screen sharing was declined. conduit cannot \
+                 capture the screen until you press try again and choose share; pointer and \
+                 keyboard input still use the compositor's virtual-input protocols."
+                .into(),
             PortalError::Denied => "screen sharing was declined. conduit needs it to see \
                  the screen and move the pointer — press try again and choose share."
                 .into(),
+            PortalError::Failed(e) if capture_only => format!(
+                "the screen-capture portal refused the session ({e}). this Hyprland/wlroots \
+                 route uses ScreenCast only; it does not require the RemoteDesktop interface, \
+                 and pointer and keyboard input remain independent."
+            ),
             PortalError::Failed(e) => format!(
                 "the desktop portal refused the session ({e}). on wayland this usually \
                  means no portal backend is installed for this compositor."
@@ -134,6 +169,8 @@ pub struct Session {
     conn: Connection,
     path: OwnedObjectPath,
     streams: Vec<Stream>,
+    mode: SessionMode,
+    clipboard: Option<Arc<ClipboardState>>,
 }
 
 impl Session {
@@ -143,6 +180,15 @@ impl Session {
 
     fn proxy<'a>(&self, interface: &'a str) -> Result<Proxy<'a>, String> {
         Proxy::new(&self.conn, PORTAL_DEST, PORTAL_PATH, interface).map_err(|e| e.to_string())
+    }
+
+    fn remote_proxy(&self) -> Result<Proxy<'_>, String> {
+        if self.mode != SessionMode::RemoteControl {
+            return Err(
+                "this portal session is capture-only; wlroots virtual input handles pointer and keyboard".into(),
+            );
+        }
+        self.proxy(REMOTE_DESKTOP)
     }
 
     /// The stream a point falls on, and the point rebased to that stream's own
@@ -171,7 +217,7 @@ impl Session {
             .locate(x, y)
             .ok_or("the portal session has no screens to position the pointer on")?;
 
-        self.proxy(REMOTE_DESKTOP)?
+        self.remote_proxy()?
             .call_method(
                 "NotifyPointerMotionAbsolute",
                 &(&self.path, Options::new(), node, sx, sy),
@@ -183,7 +229,7 @@ impl Session {
     /// `button` is an **evdev** code (`BTN_LEFT` is 0x110), not a portal-local
     /// enum — see [`super::input`] for the constants.
     pub fn pointer_button(&self, button: i32, pressed: bool) -> Result<(), String> {
-        self.proxy(REMOTE_DESKTOP)?
+        self.remote_proxy()?
             .call_method(
                 "NotifyPointerButton",
                 &(&self.path, Options::new(), button, u32::from(pressed)),
@@ -195,7 +241,7 @@ impl Session {
     /// Wheel steps in detents. `axis` 0 is vertical, 1 horizontal; positive
     /// scrolls down and right.
     pub fn pointer_axis_discrete(&self, axis: u32, steps: i32) -> Result<(), String> {
-        self.proxy(REMOTE_DESKTOP)?
+        self.remote_proxy()?
             .call_method(
                 "NotifyPointerAxisDiscrete",
                 &(&self.path, Options::new(), axis, steps),
@@ -215,13 +261,71 @@ impl Session {
     /// the wrong character on any non-US layout — the exact bug the macOS
     /// backend dodges by attaching unicode to the event instead.
     pub fn keyboard_keysym(&self, keysym: i32, pressed: bool) -> Result<(), String> {
-        self.proxy(REMOTE_DESKTOP)?
+        self.remote_proxy()?
             .call_method(
                 "NotifyKeyboardKeysym",
                 &(&self.path, Options::new(), keysym, u32::from(pressed)),
             )
             .map(|_| ())
             .map_err(|e| format!("the portal refused a keystroke: {e}"))
+    }
+
+    /* ── clipboard ── */
+
+    pub fn clipboard_read_text(&self) -> Result<Option<String>, String> {
+        if self.clipboard.is_none() {
+            return Err(
+                "the desktop portal did not grant clipboard access; enable clipboard sharing in the prompt".into(),
+            );
+        }
+
+        let proxy = self.proxy(CLIPBOARD)?;
+        let mut last_error = None;
+        for mime in ["text/plain;charset=utf-8", "text/plain"] {
+            let reply = match proxy.call_method("SelectionRead", &(&self.path, mime)) {
+                Ok(reply) => reply,
+                Err(error) => {
+                    last_error = Some(error.to_string());
+                    continue;
+                }
+            };
+            let fd: zbus::zvariant::OwnedFd = match reply.body().deserialize() {
+                Ok(fd) => fd,
+                Err(error) => {
+                    last_error = Some(error.to_string());
+                    continue;
+                }
+            };
+            let mut file = File::from(OwnedFd::from(fd));
+            let mut bytes = Vec::new();
+            if let Err(error) = file.read_to_end(&mut bytes) {
+                last_error = Some(error.to_string());
+                continue;
+            }
+            return Ok(Some(String::from_utf8_lossy(&bytes).into_owned()));
+        }
+
+        Err(format!(
+            "the portal could not read the clipboard: {}",
+            last_error.unwrap_or_else(|| "no text MIME type was offered".into())
+        ))
+    }
+
+    pub fn clipboard_write_text(&self, text: &str) -> Result<(), String> {
+        let Some(state) = &self.clipboard else {
+            return Err(
+                "the desktop portal did not grant clipboard access; enable clipboard sharing in the prompt".into(),
+            );
+        };
+        *state.data.lock() = text.as_bytes().to_vec();
+
+        let mime_types = clipboard_mime_types();
+        let mut options = Options::new();
+        options.insert("mime_types".into(), Value::from(mime_types));
+        self.proxy(CLIPBOARD)?
+            .call_method("SetSelection", &(&self.path, options))
+            .map(|_| ())
+            .map_err(|e| format!("the portal refused clipboard ownership: {e}"))
     }
 
     /* ── capture ── */
@@ -348,7 +452,20 @@ pub fn warm_up() {
 
 /* ── the handshake ────────────────────────────────────────────── */
 
+fn mode_for(route: super::sink::Route) -> SessionMode {
+    match route {
+        super::sink::Route::Wlroots => SessionMode::CaptureOnly,
+        super::sink::Route::Portal => SessionMode::RemoteControl,
+    }
+}
+
+fn session_mode() -> SessionMode {
+    mode_for(super::sink::route())
+}
+
 fn connect() -> Result<Session, PortalError> {
+    let mode = session_mode();
+    tracing::info!(?mode, "starting portal session");
     let conn = Connection::session().map_err(|e| PortalError::Missing(e.to_string()))?;
 
     // The portal derives Request object paths from the caller's unique bus
@@ -359,15 +476,20 @@ fn connect() -> Result<Session, PortalError> {
         .map(|n| n.as_str().trim_start_matches(':').replace('.', "_"))
         .ok_or_else(|| PortalError::Missing("the session bus gave us no unique name".into()))?;
 
-    let remote = Proxy::new(&conn, PORTAL_DEST, PORTAL_PATH, REMOTE_DESKTOP)
-        .map_err(|e| PortalError::Missing(e.to_string()))?;
     let cast = Proxy::new(&conn, PORTAL_DEST, PORTAL_PATH, SCREEN_CAST)
         .map_err(|e| PortalError::Missing(e.to_string()))?;
+    let remote = match mode {
+        SessionMode::CaptureOnly => None,
+        SessionMode::RemoteControl => Some(
+            Proxy::new(&conn, PORTAL_DEST, PORTAL_PATH, REMOTE_DESKTOP)
+                .map_err(|e| PortalError::Missing(e.to_string()))?,
+        ),
+    };
 
     /* 1. CreateSession */
-    let created = request(&conn, &unique, |token| {
-        remote
-            .call_method(
+    let created = match mode {
+        SessionMode::CaptureOnly => request(&conn, &unique, |token| {
+            cast.call_method(
                 "CreateSession",
                 &(options(
                     token,
@@ -375,7 +497,21 @@ fn connect() -> Result<Session, PortalError> {
                 ),),
             )
             .map(|_| ())
-    })?;
+        })?,
+        SessionMode::RemoteControl => request(&conn, &unique, |token| {
+            remote
+                .as_ref()
+                .expect("remote proxy exists for remote-control mode")
+                .call_method(
+                    "CreateSession",
+                    &(options(
+                        token,
+                        vec![("session_handle_token", Value::from("conduit"))],
+                    ),),
+                )
+                .map(|_| ())
+        })?,
+    };
 
     let handle: String = created
         .get("session_handle")
@@ -385,21 +521,24 @@ fn connect() -> Result<Session, PortalError> {
         .map_err(|e| PortalError::Failed(format!("bad session handle: {e}")))?
         .into();
 
-    /* 2. SelectDevices — what conduit is allowed to drive.
-       1 = keyboard, 2 = pointer. Touchscreen (4) is left out deliberately:
-       conduit has no touch tools, and asking for a capability it never uses
-       makes the consent dialog claim more than it should. */
-    request(&conn, &unique, |token| {
-        remote
-            .call_method(
-                "SelectDevices",
-                &(
-                    &session_path,
-                    options(token, vec![("types", Value::from(1u32 | 2u32))]),
-                ),
-            )
-            .map(|_| ())
-    })?;
+    /* 2. SelectDevices — what conduit is allowed to drive. RemoteControl
+       asks for keyboard and pointer. CaptureOnly deliberately skips this
+       step: wlroots owns those devices through its virtual protocols. */
+    if mode == SessionMode::RemoteControl {
+        request(&conn, &unique, |token| {
+            remote
+                .as_ref()
+                .expect("remote proxy exists for remote-control mode")
+                .call_method(
+                    "SelectDevices",
+                    &(
+                        &session_path,
+                        options(token, vec![("types", Value::from(1u32 | 2u32))]),
+                    ),
+                )
+                .map(|_| ())
+        })?;
+    }
 
     /* 3. SelectSources — the screens. Also what makes absolute pointer
        coordinates possible at all; see the module header. */
@@ -430,11 +569,40 @@ fn connect() -> Result<Session, PortalError> {
         .map(|_| ())
     })?;
 
+    // Clipboard is an extension of a RemoteDesktop session. It must be
+    // requested before Start, and older portal backends may not implement it;
+    // keep the session usable and report clipboard as unavailable in that
+    // case rather than making screen sharing fail as a whole.
+    let clipboard_requested = if mode == SessionMode::RemoteControl {
+        let clipboard = Proxy::new(&conn, PORTAL_DEST, PORTAL_PATH, CLIPBOARD)
+            .map_err(|e| e.to_string());
+        match clipboard {
+            Ok(proxy) => match proxy.call_method("RequestClipboard", &(&session_path, Options::new())) {
+                Ok(_) => true,
+                Err(e) => {
+                    tracing::info!("portal clipboard is unavailable: {e}");
+                    false
+                }
+            },
+            Err(e) => {
+                tracing::info!("portal clipboard interface is unavailable: {e}");
+                false
+            }
+        }
+    } else {
+        false
+    };
+
     /* 4. Start — this is what raises the dialog. No persist_mode: see header. */
-    let started = request(&conn, &unique, |token| {
-        remote
+    let started = request(&conn, &unique, |token| match mode {
+        SessionMode::CaptureOnly => cast
             .call_method("Start", &(&session_path, "", options(token, vec![])))
-            .map(|_| ())
+            .map(|_| ()),
+        SessionMode::RemoteControl => remote
+            .as_ref()
+            .expect("remote proxy exists for remote-control mode")
+            .call_method("Start", &(&session_path, "", options(token, vec![])))
+            .map(|_| ()),
     })?;
 
     let streams = parse_streams(&started);
@@ -444,11 +612,83 @@ fn connect() -> Result<Session, PortalError> {
         ));
     }
 
+    let clipboard = if clipboard_requested && clipboard_enabled(&started) {
+        let state = Arc::new(ClipboardState {
+            data: Mutex::new(Vec::new()),
+        });
+        start_clipboard_worker(&conn, &session_path, Arc::clone(&state));
+        Some(state)
+    } else {
+        if clipboard_requested {
+            tracing::info!("portal session did not grant clipboard access");
+        }
+        None
+    };
+
     Ok(Session {
         conn,
         path: session_path,
         streams,
+        mode,
+        clipboard,
     })
+}
+
+fn clipboard_enabled(response: &Results) -> bool {
+    response
+        .get("clipboard_enabled")
+        .and_then(|value| value.downcast_ref::<bool>().ok())
+        .unwrap_or(false)
+}
+
+fn clipboard_mime_types() -> Vec<String> {
+    vec![
+        "text/plain;charset=utf-8".to_string(),
+        "text/plain".to_string(),
+    ]
+}
+
+fn transfer_matches(path: &OwnedObjectPath, session_path: &OwnedObjectPath) -> bool {
+    path == session_path
+}
+
+fn start_clipboard_worker(conn: &Connection, session_path: &OwnedObjectPath, state: Arc<ClipboardState>) {
+    let conn = conn.clone();
+    let session_path = session_path.clone();
+    let _ = std::thread::Builder::new()
+        .name("conduit-portal-clipboard".into())
+        .spawn(move || {
+            let Ok(proxy) = Proxy::new(&conn, PORTAL_DEST, PORTAL_PATH, CLIPBOARD) else {
+                return;
+            };
+            let Ok(mut transfers) = proxy.receive_signal("SelectionTransfer") else {
+                return;
+            };
+
+            while let Some(message) = transfers.next() {
+                let Ok((path, _mime, serial)): Result<(OwnedObjectPath, String, u32), _> =
+                    message.body().deserialize()
+                else {
+                    continue;
+                };
+                if !transfer_matches(&path, &session_path) {
+                    continue;
+                }
+
+                let payload = state.data.lock().clone();
+                let success = proxy
+                    .call_method("SelectionWrite", &(&session_path, serial))
+                    .ok()
+                    .and_then(|reply| reply.body().deserialize::<zbus::zvariant::OwnedFd>().ok())
+                    .map(|fd| File::from(OwnedFd::from(fd)).write_all(&payload).is_ok())
+                    .unwrap_or(false);
+
+                let _ = proxy.call_method(
+                    "SelectionWriteDone",
+                    &(&session_path, serial, success),
+                );
+            }
+        });
 }
 
 /// Issues one portal call and blocks until its `Response` signal arrives.
@@ -580,4 +820,49 @@ fn pair(dict: &zbus::zvariant::Dict, key: &str) -> Option<(i32, i32)> {
     let a = fields.first()?.downcast_ref::<i32>().ok()?;
     let b = fields.get(1)?.downcast_ref::<i32>().ok()?;
     Some((a, b))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wlroots_portal_only_captures() {
+        assert_eq!(mode_for(super::super::sink::Route::Wlroots), SessionMode::CaptureOnly);
+        assert_eq!(mode_for(super::super::sink::Route::Portal), SessionMode::RemoteControl);
+    }
+
+    #[test]
+    fn clipboard_requires_an_explicit_grant() {
+        assert!(!clipboard_enabled(&HashMap::new()));
+    }
+
+    #[test]
+    fn clipboard_prefers_utf8_plain_text_and_filters_other_sessions() {
+        assert_eq!(
+            clipboard_mime_types(),
+            vec![
+                "text/plain;charset=utf-8".to_string(),
+                "text/plain".to_string()
+            ]
+        );
+        let first: OwnedObjectPath = ObjectPath::try_from("/org/example/first").unwrap().into();
+        let second: OwnedObjectPath = ObjectPath::try_from("/org/example/second").unwrap().into();
+        assert!(transfer_matches(&first, &first));
+        assert!(!transfer_matches(&first, &second));
+    }
+
+    #[test]
+    fn capture_failures_do_not_claim_remote_desktop_is_required() {
+        let message = PortalError::Failed("missing ScreenCast".into()).message_for_mode(true);
+        assert!(message.contains("ScreenCast only"));
+        assert!(message.contains("does not require the RemoteDesktop interface"));
+    }
+
+    #[test]
+    fn remote_control_failures_keep_the_portal_backend_guidance() {
+        let message = PortalError::Failed("missing RemoteDesktop".into()).message_for_mode(false);
+        assert!(message.contains("desktop portal refused the session"));
+        assert!(!message.contains("ScreenCast only"));
+    }
 }

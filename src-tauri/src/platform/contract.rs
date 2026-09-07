@@ -28,7 +28,7 @@ const _: () = {
 
     let _: fn(&Display, Option<(f64, f64, f64, f64)>, f64) -> Result<Shot, String> = capture::capture;
 
-    let _: fn() -> Option<String> = clipboard::read_text;
+    let _: fn() -> Result<Option<String>, String> = clipboard::read_text;
     let _: fn(&str) -> Result<(), String> = clipboard::write_text;
 
     let _: fn() -> String = host::description;

@@ -89,7 +89,7 @@ pub fn enabled() -> bool {
     let Ok(conn) = a11y_bus() else {
         return false;
     };
-    children(&conn, &(REGISTRY_NAME.to_string(), root_path()))
+    applications(&conn)
         .map(|apps| !apps.is_empty())
         .unwrap_or(false)
 }
@@ -102,10 +102,38 @@ fn root_path() -> zbus::zvariant::OwnedObjectPath {
 
 /// How to turn accessibility on, for the readiness card and for errors.
 pub fn how_to_enable() -> &'static str {
-    "no application is publishing an accessibility tree. turn it on with:\n  \
-     gsettings set org.gnome.desktop.interface toolkit-accessibility true\n\
-     and add QT_ACCESSIBILITY=1 to ~/.config/environment.d/ for qt and kde apps, \
-     then log back in. screenshots and clicking work without it."
+    "no application is publishing an accessibility tree. on gnome, enable gtk \
+     accessibility with:\n  gsettings set org.gnome.desktop.interface toolkit-accessibility true\n\
+     for qt and kde apps, add QT_ACCESSIBILITY=1 to ~/.config/environment.d/ and \
+     then log back in. restart applications so they publish their trees. conduit \
+     does not change these settings or install an extension; screenshots and \
+     clicking work without AT-SPI."
+}
+
+/// The readiness card needs to distinguish an accessibility bus that cannot be
+/// reached from a bus with no publishing applications. The latter is the usual
+/// GNOME/GTK default; the former usually means the AT-SPI launcher is missing.
+pub fn readiness() -> (bool, String) {
+    let Ok(conn) = a11y_bus() else {
+        return (
+            false,
+            "the AT-SPI accessibility bus is unavailable. make sure the desktop's accessibility \
+             bus service is installed and running; screenshots and clicking still work."
+                .into(),
+        );
+    };
+
+    match applications(&conn) {
+        Some(apps) if !apps.is_empty() => (true, String::new()),
+        Some(_) => (false, how_to_enable().into()),
+        None => (
+            false,
+            "the AT-SPI registry is running but did not return its application list. \
+             restart the affected application or the accessibility bus; screenshots and \
+             clicking still work."
+                .into(),
+        ),
+    }
 }
 
 /* ── walking ──────────────────────────────────────────────────── */
@@ -122,6 +150,24 @@ fn children(conn: &Connection, node: &Node) -> Option<Vec<Node>> {
         .call("GetChildren", &())
         .ok()?;
     Some(raw)
+}
+
+fn applications(conn: &Connection) -> Option<Vec<(String, Node)>> {
+    let root = (REGISTRY_NAME.to_string(), root_path());
+    let apps = children(conn, &root)?;
+    // conduit publishes its own GTK tree. It is useful for debugging, but it
+    // must not make readiness green or become the default screen target.
+    Some(
+        apps.into_iter()
+            .map(|node| {
+                let name = attributes(conn, &node)
+                    .and_then(|a| string_attr(&a, "Name"))
+                    .unwrap_or_default();
+                (name, node)
+            })
+            .filter(|(name, _)| !name.eq_ignore_ascii_case("conduit"))
+            .collect(),
+    )
 }
 
 /// Name, description and child count in one round trip.
@@ -231,29 +277,11 @@ fn walk(conn: &Connection, node: &Node, depth: usize, visits: &mut usize, out: &
 
 /// The application node to read, given an optional name.
 fn target(conn: &Connection, app_name: Option<&str>) -> Result<Vec<Node>, String> {
-    let root = (REGISTRY_NAME.to_string(), root_path());
-    let apps = children(conn, &root)
-        .ok_or("the accessibility registry returned no applications")?;
+    let named = applications(conn).ok_or("the accessibility registry returned no applications")?;
 
-    if apps.is_empty() {
+    if named.is_empty() {
         return Err(how_to_enable().into());
     }
-
-    let named: Vec<(String, Node)> = apps
-        .into_iter()
-        .map(|node| {
-            let name = attributes(conn, &node)
-                .and_then(|a| string_attr(&a, "Name"))
-                .unwrap_or_default();
-            (name, node)
-        })
-        // conduit is a GTK app and publishes its own tree like any other. Left
-        // in, `read_screen_text` hands an agent conduit's own Tools tab and
-        // mode dropdown — the exact controls `chrome::point_hits_conduit`
-        // exists to keep out of reach. `list_windows` already filters conduit
-        // out by pid; this is the same rule for the accessibility tree.
-        .filter(|(name, _)| !name.eq_ignore_ascii_case("conduit"))
-        .collect();
 
     match app_name {
         Some(wanted) => {
@@ -309,7 +337,12 @@ pub fn read_screen(app_name: Option<&str>) -> Result<Vec<Element>, String> {
     }
 
     if out.is_empty() {
-        return Err(how_to_enable().into());
+        return Err(
+            "AT-SPI is available, but the target application published no named controls with \
+             usable screen bounds. screenshots still work when an app exposes no accessible \
+             tree."
+                .into(),
+        );
     }
     Ok(out)
 }
@@ -317,4 +350,18 @@ pub fn read_screen(app_name: Option<&str>) -> Result<Vec<Element>, String> {
 /// Elements whose text matches `query`, best match first.
 pub fn find_element(query: &str, app_name: Option<&str>) -> Result<Vec<Element>, String> {
     Ok(rank_matches(query, read_screen(app_name)?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn guidance_is_actionable_without_installing_an_extension() {
+        let hint = how_to_enable();
+        assert!(hint.contains("toolkit-accessibility"));
+        assert!(hint.contains("QT_ACCESSIBILITY=1"));
+        assert!(hint.contains("does not change these settings or install an extension"));
+        assert!(hint.contains("screenshots and clicking work"));
+    }
 }

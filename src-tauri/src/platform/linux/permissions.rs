@@ -50,7 +50,7 @@ pub fn screen_recording_granted() -> bool {
 
 /// Input can work through virtual devices even without a capture session.
 pub fn accessibility_granted() -> bool {
-    super::sink::blocked_reason().is_none()
+    super::ax::enabled()
 }
 
 /// Asks for the portal session, raising the dialog if it has not been answered.
@@ -68,12 +68,17 @@ pub fn prompt_screen_recording() -> bool {
 }
 
 pub fn prompt_accessibility() -> bool {
-    accessibility_granted() || prompt_screen_recording()
+    // AT-SPI has no consent dialog that conduit can raise. Toolkits publish
+    // their own trees when accessibility is enabled in the desktop/session;
+    // never turn on a user's global setting or request an unrelated portal
+    // session as a side effect of this command.
+    accessibility_granted()
 }
 
 pub fn snapshot() -> Readiness {
     let session = super::portal::established();
     let input_error = super::sink::blocked_reason();
+    let (accessibility_tree, accessibility_hint) = super::ax::readiness();
 
     Readiness::Linux {
         desktop: desktop(),
@@ -93,8 +98,8 @@ pub fn snapshot() -> Readiness {
         input_error,
         capture_ready: super::capture::has_frames(),
         window_management: super::kwin::available(),
-        accessibility_tree: super::ax::enabled(),
-        accessibility_hint: super::ax::how_to_enable().to_string(),
+        accessibility_tree,
+        accessibility_hint,
         panic_stop: super::panic_stop::readable(),
         panic_stop_hint: super::panic_stop::how_to_enable(),
     }

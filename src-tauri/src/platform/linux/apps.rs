@@ -16,7 +16,7 @@ use std::hash::{Hash, Hasher};
 use parking_lot::RwLock;
 use serde::Deserialize;
 
-use super::{hyprctl, kwin};
+use super::{hyprctl, kwin, permissions};
 use crate::platform::types::{AppInfo, OwnWindows, WindowInfo};
 
 /// Maps the `u32` window ids the tool surface uses onto KWin's UUIDs.
@@ -31,6 +31,25 @@ static WINDOW_IDS: RwLock<Option<HashMap<u32, String>>> = RwLock::new(None);
 /// The pid owning the focused window, as of the last [`list_windows`]. KWin
 /// reports this per window; `list_apps` needs it per application.
 static ACTIVE_PID: RwLock<Option<i32>> = RwLock::new(None);
+
+fn window_control_unsupported(operation: &str) -> String {
+    window_control_unsupported_for(operation, &permissions::desktop(), permissions::wayland())
+}
+
+fn window_control_unsupported_for(operation: &str, desktop: &str, wayland: bool) -> String {
+    let desktop = desktop.to_ascii_lowercase();
+    if wayland && desktop.contains("gnome") {
+        format!(
+            "{operation} is unsupported on GNOME Wayland. GNOME does not expose a protocol for one app to read or change another app's window geometry; no extension is required or used by conduit. screenshots, clicking, typing and screen text still work."
+        )
+    } else if !wayland {
+        format!(
+            "{operation} is unavailable on this Linux X11 session because conduit has no X11 window-control backend. screenshots, clicking, typing and screen text still work."
+        )
+    } else {
+        kwin::unsupported(operation)
+    }
+}
 
 /// A window as the KWin script reports it.
 #[derive(Debug, Deserialize)]
@@ -153,7 +172,7 @@ report(out);
 /// What a window listing is quietly not telling the agent.
 pub fn list_windows_hint(windows: &[WindowInfo]) -> Option<String> {
     if !kwin::available() {
-        return Some(kwin::unsupported("listing windows"));
+        return Some(window_control_unsupported("listing windows"));
     }
     // An empty list on a desktop that plainly has windows means the script
     // failed rather than that nothing is open. Saying so beats an agent
@@ -217,6 +236,9 @@ fn uuid_for(window_id: u32) -> Result<String, String> {
 
 /// Brings a window to the front and gives it focus.
 pub fn focus_window(window_id: u32) -> Result<(), String> {
+    if !kwin::available() {
+        return Err(window_control_unsupported("focusing a window"));
+    }
     let uuid = uuid_for(window_id)?;
     let script = format!(
         r#"
@@ -299,6 +321,9 @@ pub fn set_window_bounds(
     width: f64,
     height: f64,
 ) -> Result<(), String> {
+    if !kwin::available() {
+        return Err(window_control_unsupported("moving or resizing a window"));
+    }
     let uuid = uuid_for(window_id)?;
     let script = format!(
         r#"
@@ -630,6 +655,20 @@ pub fn notify(title: &str, body: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn names_gnome_wayland_as_an_unsupported_window_backend() {
+        let message = window_control_unsupported_for("focusing a window", "GNOME", true);
+        assert!(message.contains("unsupported on GNOME Wayland"));
+        assert!(message.contains("no extension is required or used"));
+    }
+
+    #[test]
+    fn does_not_describe_x11_as_a_wayland_protocol_gap() {
+        let message = window_control_unsupported_for("listing windows", "GNOME", false);
+        assert!(message.contains("Linux X11 session"));
+        assert!(!message.contains("Wayland"));
+    }
 
     #[test]
     fn window_ids_are_stable_and_never_zero() {

@@ -42,18 +42,22 @@ impl Drop for Clipboard {
     }
 }
 
-pub fn read_text() -> Option<String> {
-    let _guard = Clipboard::open()?;
+pub fn read_text() -> Result<Option<String>, String> {
+    let Some(_guard) = Clipboard::open() else {
+        return Err("another application is holding the clipboard open".into());
+    };
 
-    let handle = unsafe { GetClipboardData(CF_UNICODETEXT.0 as u32) }.ok()?;
+    let Ok(handle) = (unsafe { GetClipboardData(CF_UNICODETEXT.0 as u32) }) else {
+        return Ok(None);
+    };
     if handle.is_invalid() {
-        return None;
+        return Ok(None);
     }
 
     let hglobal = HGLOBAL(handle.0);
     let ptr = unsafe { GlobalLock(hglobal) } as *const u16;
     if ptr.is_null() {
-        return None;
+        return Ok(None);
     }
 
     // The buffer is NUL-terminated UTF-16; walk to the terminator.
@@ -68,7 +72,7 @@ pub fn read_text() -> Option<String> {
     let text = String::from_utf16_lossy(slice);
 
     let _ = unsafe { GlobalUnlock(hglobal) };
-    Some(text)
+    Ok(Some(text))
 }
 
 pub fn write_text(text: &str) -> Result<(), String> {
