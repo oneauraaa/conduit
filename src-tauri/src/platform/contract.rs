@@ -16,7 +16,7 @@
 
 #![allow(dead_code)]
 
-use super::types::{AppInfo, Display, Element, Shot, WindowInfo};
+use super::types::{AppInfo, Display, Element, OwnWindows, Shot, WindowInfo};
 use super::*;
 
 const _: () = {
@@ -30,6 +30,14 @@ const _: () = {
 
     let _: fn() -> Option<String> = clipboard::read_text;
     let _: fn(&str) -> Result<(), String> = clipboard::write_text;
+
+    let _: fn() -> String = host::description;
+    let _: &str = host::OS;
+    let _: &str = host::DEVICE;
+    let _: &str = host::SHELL;
+    let _: &str = host::SHORTCUT_MODIFIER;
+    let _: &str = host::CHROME_ANCHOR;
+    let _: &str = host::AX_SOURCE;
 
     let _: fn() -> (f64, f64) = input::cursor_position;
     let _: fn(i32, i32) = input::scroll;
@@ -64,6 +72,7 @@ const _: () = {
     let _: fn(&str) -> Result<(), String> = apps::open_app;
     let _: fn(&str) -> Result<(), String> = apps::quit_app;
     let _: fn(&str, &str) -> Result<(), String> = apps::notify;
+    let _: fn() -> OwnWindows = apps::own_windows;
 
     let _: fn(&str) -> tokio::process::Command = shell::command;
 };

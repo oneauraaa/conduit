@@ -45,8 +45,8 @@
       "icons/icon.ico"
     ],
     "category": "Utility",
-    "shortDescription": "let ai agents use your mac",
-    "longDescription": "conduit is the bridge between AI agents and your Mac. It runs an MCP server that exposes screen capture, cursor control, keyboard input and window management — but only while conduit is open.",
+    "shortDescription": "let ai agents use your computer",
+    "longDescription": "conduit is the bridge between AI agents and your computer. It runs an MCP server that exposes screen capture, cursor control, keyboard input and window management — but only while conduit is open.",
     "macOS": {
       "minimumSystemVersion": "14.0",
       "entitlements": "entitlements.plist"

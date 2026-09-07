@@ -47,6 +47,9 @@ enum Format {
 /// of these agents are CLIs that put their config in the same dot-directory on
 /// every OS, so only the odd one out — Claude Desktop, a GUI app following
 /// platform convention — needs the override.
+// Each build reads only its own platform's columns, so the other two always
+// look dead. That is the point of the table.
+#[allow(dead_code)]
 struct Spec {
     id: &'static str,
     name: &'static str,
@@ -57,18 +60,28 @@ struct Spec {
     /// `home().join(..)` mechanism reaches it. `None` means [`Spec::path`] is
     /// correct on both.
     win_path: Option<&'static str>,
+    /// Where Linux puts it instead, relative to home. GUI apps follow the XDG
+    /// basedir spec (`~/.config/...`) rather than macOS's Application Support,
+    /// so the same one odd entry needs a third spelling.
+    linux_path: Option<&'static str>,
     format: Format,
     /// If present, the agent counts as installed when this directory exists,
     /// even before its config file has been created.
     marker_dir: Option<&'static str>,
     /// The Windows counterpart of [`Spec::marker_dir`], same rule as above.
     win_marker_dir: Option<&'static str>,
+    /// The Linux counterpart of [`Spec::marker_dir`], same rule as above.
+    linux_marker_dir: Option<&'static str>,
     /// Bundle id of the macOS app whose icon represents this agent.
     ///
     /// Several of these are CLIs with no bundle of their own, so they borrow
     /// the icon of the same vendor's desktop app — same brand, and it's the
     /// mark a user actually recognises. `None` falls back to a monogram.
     icon_bundle: Option<&'static str>,
+    /// The desktop-entry name Linux knows the same vendor app by. Icons are
+    /// resolved out of the active icon theme through it — see
+    /// `platform/linux/appicon.rs`.
+    icon_desktop: Option<&'static str>,
     /// The executable name Windows knows the same vendor app by, looked up
     /// through the registry's App Paths and the Start Menu. Windows has no
     /// bundle identifiers, so this is the nearest stable handle.
@@ -82,7 +95,11 @@ impl Spec {
         {
             return self.win_path.unwrap_or(self.path);
         }
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(target_os = "linux")]
+        {
+            return self.linux_path.unwrap_or(self.path);
+        }
+        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
         self.path
     }
 
@@ -91,7 +108,11 @@ impl Spec {
         {
             return self.win_marker_dir.or(self.marker_dir);
         }
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(target_os = "linux")]
+        {
+            return self.linux_marker_dir.or(self.marker_dir);
+        }
+        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
         self.marker_dir
     }
 
@@ -101,7 +122,11 @@ impl Spec {
         {
             return self.icon_exe;
         }
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(target_os = "linux")]
+        {
+            return self.icon_desktop;
+        }
+        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
         self.icon_bundle
     }
 }
@@ -112,10 +137,13 @@ const SPECS: &[Spec] = &[
         name: "claude code",
         path: ".claude.json",
         win_path: None,
+        linux_path: None,
         format: Format::JsonMcpServers,
         marker_dir: Some(".claude"),
         win_marker_dir: None,
+        linux_marker_dir: None,
         icon_bundle: Some("com.anthropic.claudefordesktop"),
+        icon_desktop: Some("claude-desktop"),
         icon_exe: Some("claude.exe"),
     },
     Spec {
@@ -123,10 +151,13 @@ const SPECS: &[Spec] = &[
         name: "codex",
         path: ".codex/config.toml",
         win_path: None,
+        linux_path: None,
         format: Format::TomlMcpServers,
         marker_dir: Some(".codex"),
         win_marker_dir: None,
+        linux_marker_dir: None,
         icon_bundle: Some("com.openai.codex"),
+        icon_desktop: None,
         // None on purpose. npm installs codex as a `.ps1` shim, and any
         // `codex.exe` that turns up on PATH is a generic launcher wearing
         // Node's icon — worse than the real mark bundled in
@@ -141,10 +172,13 @@ const SPECS: &[Spec] = &[
         // `%LOCALAPPDATA%` rather than a home dot-directory. Only the location
         // differs — which is the entire reason these columns exist.
         win_path: Some("AppData/Local/hermes/config.yaml"),
+        linux_path: None,
         format: Format::YamlMcpServers,
         marker_dir: Some(".hermes"),
         win_marker_dir: Some("AppData/Local/hermes"),
+        linux_marker_dir: None,
         icon_bundle: None,
+        icon_desktop: None,
         // Left None even though `hermes.exe` is on PATH: it is a Python venv
         // shim wearing a generic interpreter icon, and the bundled mark in
         // `assets/agents/hermes.png` is the real one.
@@ -155,10 +189,13 @@ const SPECS: &[Spec] = &[
         name: "openclaw",
         path: ".openclaw/openclaw.json",
         win_path: None,
+        linux_path: None,
         format: Format::JsonMcpServers,
         marker_dir: Some(".openclaw"),
         win_marker_dir: None,
+        linux_marker_dir: None,
         icon_bundle: None,
+        icon_desktop: None,
         icon_exe: None,
     },
     Spec {
@@ -166,10 +203,13 @@ const SPECS: &[Spec] = &[
         name: "opencode",
         path: ".config/opencode/opencode.jsonc",
         win_path: None,
+        linux_path: None,
         format: Format::JsoncMcp,
         marker_dir: Some(".config/opencode"),
         win_marker_dir: None,
+        linux_marker_dir: None,
         icon_bundle: None,
+        icon_desktop: None,
         icon_exe: None,
     },
     Spec {
@@ -177,10 +217,13 @@ const SPECS: &[Spec] = &[
         name: "claude desktop",
         path: "Library/Application Support/Claude/claude_desktop_config.json",
         win_path: Some("AppData/Roaming/Claude/claude_desktop_config.json"),
+        linux_path: Some(".config/Claude/claude_desktop_config.json"),
         format: Format::JsonMcpServers,
         marker_dir: Some("Library/Application Support/Claude"),
         win_marker_dir: Some("AppData/Roaming/Claude"),
+        linux_marker_dir: Some(".config/Claude"),
         icon_bundle: Some("com.anthropic.claudefordesktop"),
+        icon_desktop: Some("claude-desktop"),
         icon_exe: Some("claude.exe"),
     },
 ];
@@ -548,6 +591,18 @@ mod tests {
                 desktop.rel_path(),
                 "AppData/Roaming/Claude/claude_desktop_config.json"
             );
+        } else if cfg!(target_os = "linux") {
+            // Hermes is a CLI and keeps its dot-directory; Claude Desktop is a
+            // GUI app and follows the XDG basedir spec rather than copying
+            // macOS's Application Support. That split is the whole reason the
+            // per-platform columns exist.
+            assert_eq!(hermes.rel_path(), ".hermes/config.yaml");
+            assert_eq!(hermes.rel_marker_dir(), Some(".hermes"));
+            assert_eq!(
+                desktop.rel_path(),
+                ".config/Claude/claude_desktop_config.json"
+            );
+            assert_eq!(desktop.rel_marker_dir(), Some(".config/Claude"));
         } else {
             assert_eq!(hermes.rel_path(), ".hermes/config.yaml");
             assert_eq!(hermes.rel_marker_dir(), Some(".hermes"));

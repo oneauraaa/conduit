@@ -342,3 +342,8 @@ pub fn list_windows_hint(windows: &[WindowInfo]) -> Option<String> {
             .to_string()
     })
 }
+
+/// See [`crate::platform::types::OwnWindows`]. AppKit reports a window's own frame and Tauri passes it straight through.
+pub fn own_windows() -> crate::platform::types::OwnWindows {
+    crate::platform::types::OwnWindows::AskTauri
+}

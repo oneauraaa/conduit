@@ -8,7 +8,7 @@
 Looking at the screen, moving a cursor, clicking, typing.
 
 [![build](https://github.com/oneauraaa/conduit/actions/workflows/build.yml/badge.svg)](https://github.com/oneauraaa/conduit/actions/workflows/build.yml)
-&nbsp;·&nbsp; macOS 14+ &nbsp;·&nbsp; Windows 10 1903+ / 11
+&nbsp;·&nbsp; macOS 14+ &nbsp;·&nbsp; Windows 10 1903+ / 11 &nbsp;·&nbsp; Linux (Wayland)
 
 </div>
 
@@ -22,8 +22,9 @@ instead of quitting.
 
 While an agent is driving, the machine shows it: an aqua glow breathes around
 every screen edge, the AI's cursor is a glowing orb with a comet trail, and a
-control pill floats above the Dock or taskbar with a live readout, a mode switch
-and a stop button. Hold **Escape** for 800ms to take control back from anywhere.
+control pill floats above the Dock, taskbar or panel with a live readout, a mode
+switch and a stop button. Hold **Escape** for 800ms to take control back from
+anywhere.
 
 ## Install
 
@@ -33,9 +34,33 @@ Grab the zip for your platform from [Releases](../../releases). No installer.
   Windows 11 already has.
 - **macOS** — unzip, move `conduit.app` to Applications. Grant Accessibility and
   Screen Recording when the Server tab asks.
+- **Linux** — unzip, `chmod +x conduit`, run it. Wayland only, and it needs
+  `xdg-desktop-portal` with the backend for your desktop
+  (`xdg-desktop-portal-kde` on Plasma).
 
-Neither build is signed, so the first launch needs one click past SmartScreen or
-Gatekeeper.
+Neither the Windows nor the macOS build is signed, so the first launch needs one
+click past SmartScreen or Gatekeeper.
+
+### On Linux, specifically
+
+Wayland hands an ordinary application nothing — no pointer control, no screen
+reads, no window geometry — so conduit asks for it through the desktop portal.
+Three things follow, and they are properties of the platform rather than of
+conduit:
+
+- **The screen-sharing prompt appears on every launch.** The portal refuses to
+  make this particular grant permanent, deliberately: a token that silently
+  restored full input control of a machine is exactly what an attacker would
+  want. Answer it once per run and leave conduit in the tray.
+- **Window move, resize and focus need KWin** — that is, KDE Plasma. No Wayland
+  protocol lets one application change another's geometry, so those three tools
+  report as unsupported elsewhere. Everything else works on any compositor with
+  a portal.
+- **Two capabilities are off by default**, and the Server tab shows both with
+  the command that fixes them: reading on-screen text needs AT-SPI turned on,
+  and hold-Escape needs read access to the keyboard device
+  (`sudo usermod -aG input $USER`). Until then the pill's stop button is the way
+  to take control back.
 
 ## Connect an agent
 
@@ -81,8 +106,19 @@ pnpm package                   # a release zip in dist-release/
 cd src-tauri && cargo test --lib
 ```
 
+`pnpm dev` takes `?platform=macos|windows|linux`, which is the only way to
+review one platform's readiness card from a machine running another.
+
+On Linux the build needs the WebKitGTK stack plus PipeWire's headers and clang
+(the capture backend binds through bindgen). On Arch:
+
+```bash
+sudo pacman -S webkit2gtk-4.1 gtk3 libayatana-appindicator pipewire clang
+sudo pacman -S gtk-layer-shell   # optional: lets the glow sit over other windows
+```
+
 Everything that touches an OS API lives behind `src-tauri/src/platform/`, with
-two backends exposing identical signatures — `contract.rs` fails to compile if
+three backends exposing identical signatures — `contract.rs` fails to compile if
 they drift, and `mcp/tools.rs` contains no `#[cfg]` at all.
 
 ```
@@ -92,9 +128,10 @@ src-tauri/src/
   mcp/tools.rs        the 22 tools
   platform/mac/       AppKit · Quartz · ScreenCaptureKit · AX
   platform/win/       Win32 · Windows.Graphics.Capture · UI Automation
+  platform/linux/     xdg portals · PipeWire · KWin scripting · AT-SPI2
 ```
 
-Traps worth knowing before you touch either backend live in
+Traps worth knowing before you touch any backend live in
 [docs/notes.md](docs/notes.md).
 
 ## Brand

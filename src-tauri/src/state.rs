@@ -224,13 +224,55 @@ pub struct PulseEvent {
 /// in the UI, so the Server tab confidently reported broken capture and broken
 /// DPI awareness on a machine where both were fine. `elevated` hid it for a
 /// while by being a single word.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+// Only one variant is ever constructed in a given build; the other two are
+// still compiled so the shape stays in one place and the UI's discriminated
+// union has something to match.
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "platform", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Readiness {
     #[serde(rename = "macos")]
     MacOS {
         accessibility: bool,
         screen_recording: bool,
+    },
+    /// Linux reports five capabilities rather than one grant, because that is
+    /// genuinely what it has: each comes from a different subsystem with its
+    /// own consent model, and any of them can be missing while conduit
+    /// otherwise runs. Only `portal_ready` is fatal. See
+    /// `platform/linux/permissions.rs`.
+    #[serde(rename = "linux")]
+    Linux {
+        /// `XDG_CURRENT_DESKTOP`, so the card can name what it found.
+        desktop: String,
+        wayland: bool,
+        /// The screen-sharing session is live. This is about *capture* only:
+        /// input used to ride on the same portal session and no longer has to,
+        /// so a machine can see nothing and still drive the pointer perfectly.
+        portal_ready: bool,
+        /// Why it isn't, when it isn't. `None` while the prompt is unanswered.
+        portal_error: Option<String>,
+        /// Which of Wayland's two input routes this machine uses — "wlroots"
+        /// for the virtual-pointer protocols, "portal" for RemoteDesktop.
+        /// Named rather than a bool because the two fail for entirely different
+        /// reasons and the card has to tell the user which one to chase.
+        input_route: String,
+        /// Input is usable: the pointer moves and keys land.
+        input_ready: bool,
+        /// Why it isn't, when it isn't.
+        input_error: Option<String>,
+        /// Frames are actually arriving. A session can be live while capture is
+        /// not, if the compositor negotiated a buffer type conduit cannot map.
+        capture_ready: bool,
+        /// KWin is present, so windows can be listed, moved and focused.
+        window_management: bool,
+        /// Some application is publishing an accessibility tree. Off by default
+        /// on Plasma, which is why the hint below travels with it.
+        accessibility_tree: bool,
+        accessibility_hint: String,
+        /// The keyboard is readable, so hold-Escape works.
+        panic_stop: bool,
+        panic_stop_hint: String,
     },
     #[serde(rename = "windows")]
     Windows {
@@ -572,5 +614,50 @@ mod tests {
         let json = serde_json::to_value(mac).unwrap();
         assert_eq!(json["platform"], "macos");
         assert!(json.get("screenRecording").is_some(), "got {json}");
+
+        let linux = Readiness::Linux {
+            desktop: "KDE".into(),
+            wayland: true,
+            portal_ready: true,
+            portal_error: None,
+            input_route: "portal".into(),
+            input_ready: true,
+            input_error: None,
+            capture_ready: true,
+            window_management: true,
+            accessibility_tree: false,
+            accessibility_hint: "turn it on".into(),
+            panic_stop: false,
+            panic_stop_hint: "join the input group".into(),
+        };
+        let json = serde_json::to_value(linux).unwrap();
+
+        assert_eq!(json["platform"], "linux");
+        for key in [
+            "desktop",
+            "wayland",
+            "portalReady",
+            "portalError",
+            "captureReady",
+            "windowManagement",
+            "accessibilityTree",
+            "accessibilityHint",
+            "panicStop",
+            "panicStopHint",
+        ] {
+            assert!(
+                json.get(key).is_some(),
+                "missing `{key}` — the UI reads that name; got {json}"
+            );
+        }
+        // The hints are the whole value of the two opt-in rows: the card
+        // renders them verbatim when the capability is off, so an empty or
+        // dropped string leaves the user with a red row and no way forward.
+        assert_eq!(json["accessibilityHint"], "turn it on");
+        assert_eq!(json["panicStopHint"], "join the input group");
+        // `None` must serialize as null rather than vanishing, or the UI's
+        // `portalError === null` check reads undefined and shows the wrong
+        // branch while the prompt is still open.
+        assert!(json["portalError"].is_null());
     }
 }

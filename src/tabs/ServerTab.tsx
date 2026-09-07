@@ -2,12 +2,16 @@ import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import {
   Accessibility,
+  AppWindow,
   Check,
   Copy,
   Hand,
+  Keyboard,
   MonitorPlay,
+  MousePointer2,
   Play,
   RotateCw,
+  ScreenShare,
   ShieldAlert,
   Square,
   TriangleAlert,
@@ -84,11 +88,13 @@ export function ServerTab({ server }: { server: ServerState }) {
     };
   }, []);
 
-  // Both platforms need the poll, for different reasons. macOS only
+  // Every platform needs the poll, for different reasons. macOS only
   // re-evaluates TCC grants for a running process on the next check, so this
   // catches a grant made in System Settings. On Windows the foreground window
   // changes constantly, and whether it is elevated is half of what this card
-  // reports.
+  // reports. On Linux the screen-sharing dialog is answered *outside* the app,
+  // and this is what notices — nothing emits an event when the user clicks
+  // share.
   useEffect(() => {
     const t = setInterval(() => {
       if (!document.hidden) void getReadiness().then(setPerms).catch(() => {});
@@ -254,7 +260,11 @@ export function ServerTab({ server }: { server: ServerState }) {
       {/* ── readiness ──────────────────────────────────────── */}
       <div className="flex flex-col gap-2">
         <SectionLabel>
-          {perms.platform === "macos" ? "macos permissions" : "windows readiness"}
+          {perms.platform === "macos"
+            ? "macos permissions"
+            : perms.platform === "linux"
+              ? "wayland readiness"
+              : "windows readiness"}
         </SectionLabel>
         <Card>
           {perms.platform === "macos" ? (
@@ -274,6 +284,8 @@ export function ServerTab({ server }: { server: ServerState }) {
                 onGrant={() => void openPermissionSettings("screen")}
               />
             </>
+          ) : perms.platform === "linux" ? (
+            <LinuxReadiness state={perms} />
           ) : (
             <WindowsReadiness state={perms} />
           )}
@@ -459,5 +471,197 @@ function PermissionRow({
         </Button>
       )}
     </Row>
+  );
+}
+
+/**
+ * The Linux counterpart of the macOS grant rows.
+ *
+ * Wayland does not hand a trusted process the machine the way the other two do.
+ * Each capability comes from a different subsystem with its own consent model,
+ * and any of them can be missing while conduit otherwise runs perfectly — so
+ * this card reports five things rather than one.
+ *
+ * Input and screen sharing are the two that matter, and they are separate rows
+ * because they are separate mechanisms: a wlroots desktop drives the pointer
+ * through virtual-input protocols that need no prompt, while capture always
+ * goes through the portal. Reporting them as one — which conduit used to do —
+ * told a Hyprland user that the pointer was dead when only capture was.
+ *
+ * The rest are ordered by how much an agent loses without them, and each
+ * carries the exact command that fixes it, because every one of them fails
+ * *silently* at the point of use otherwise: an empty window list, an
+ * accessibility tree with two nodes in it, an Escape hold that does nothing.
+ */
+function LinuxReadiness({
+  state,
+}: {
+  state: Extract<Readiness, { platform: "linux" }>;
+}) {
+  const waiting = !state.portalReady && state.portalError === null;
+
+  return (
+    <>
+      <Row
+        icon={
+          <span
+            className={
+              state.portalReady
+                ? "text-[var(--color-aqua)]"
+                : waiting
+                  ? "text-[rgb(var(--text-faint))]"
+                  : "text-amber-500"
+            }
+          >
+            <ScreenShare size={15} />
+          </span>
+        }
+        title="screen sharing"
+        description={
+          state.portalReady
+            ? state.captureReady
+              ? "granted — conduit can see the screen"
+              : "granted, but no frames have arrived yet from the capture stream"
+            : waiting
+              ? "waiting for you to answer the sharing prompt. it asks on every launch — wayland refuses to make this one permanent."
+              : (state.portalError ?? "unavailable")
+        }
+      >
+        {state.portalReady ? (
+          <span className="flex items-center gap-1 text-[11px] font-medium text-[var(--color-aqua)]">
+            <Check size={12} strokeWidth={3} />
+          </span>
+        ) : (
+          <Button onClick={() => void openPermissionSettings("screen")}>
+            {!waiting && <TriangleAlert size={11} />} {waiting ? "waiting…" : "try again"}
+          </Button>
+        )}
+      </Row>
+
+      {/* Its own row rather than a clause on the one above, because the two
+          come from different places. On Hyprland or sway this is green while
+          screen sharing is still waiting on its dialog; on GNOME and KDE both
+          ride the same portal session and rise and fall together. */}
+      <Row
+        icon={
+          <span
+            className={
+              state.inputReady
+                ? "text-[var(--color-aqua)]"
+                : "text-amber-500"
+            }
+          >
+            <MousePointer2 size={15} />
+          </span>
+        }
+        title="pointer & keyboard"
+        description={
+          state.inputReady
+            ? state.inputRoute === "wlroots"
+              ? "the compositor's virtual-input protocols — no prompt needed, and it survives a declined screen-sharing dialog"
+              : "granted through the desktop portal, on the same session as screen sharing"
+            : (state.inputError ??
+              "conduit cannot move the pointer or press a key on this desktop")
+        }
+      >
+        {state.inputReady && (
+          <span className="flex items-center gap-1 text-[11px] font-medium text-[var(--color-aqua)]">
+            <Check size={12} strokeWidth={3} />
+          </span>
+        )}
+      </Row>
+
+      <Row
+        icon={
+          <span
+            className={
+              state.windowManagement
+                ? "text-[var(--color-aqua)]"
+                : "text-[rgb(var(--text-faint))]"
+            }
+          >
+            <AppWindow size={15} />
+          </span>
+        }
+        title="window control"
+        description={
+          state.windowManagement
+            ? "kwin is here, so windows can be listed, moved and focused"
+            : `no wayland protocol lets one app read or move another's windows, and ${state.desktop} exposes no alternative. those three tools are unavailable; everything else works.`
+        }
+      >
+        {state.windowManagement && (
+          <span className="flex items-center gap-1 text-[11px] font-medium text-[var(--color-aqua)]">
+            <Check size={12} strokeWidth={3} />
+          </span>
+        )}
+      </Row>
+
+      <Row
+        icon={
+          <span
+            className={
+              state.accessibilityTree
+                ? "text-[var(--color-aqua)]"
+                : "text-[rgb(var(--text-faint))]"
+            }
+          >
+            <Accessibility size={15} />
+          </span>
+        }
+        title="screen text"
+        description={
+          state.accessibilityTree
+            ? "apps are publishing an accessibility tree, so the agent can read controls instead of guessing from pixels"
+            : state.accessibilityHint
+        }
+      >
+        {state.accessibilityTree && (
+          <span className="flex items-center gap-1 text-[11px] font-medium text-[var(--color-aqua)]">
+            <Check size={12} strokeWidth={3} />
+          </span>
+        )}
+      </Row>
+
+      <Row
+        icon={
+          <span
+            className={
+              state.panicStop ? "text-[var(--color-aqua)]" : "text-amber-500"
+            }
+          >
+            <Keyboard size={15} />
+          </span>
+        }
+        title="hold escape"
+        description={
+          state.panicStop
+            ? "holding escape for a moment takes control back from anywhere"
+            : state.panicStopHint
+        }
+      >
+        {state.panicStop && (
+          <span className="flex items-center gap-1 text-[11px] font-medium text-[var(--color-aqua)]">
+            <Check size={12} strokeWidth={3} />
+          </span>
+        )}
+      </Row>
+
+      {/* Only surfaced when wrong. conduit's whole linux path assumes wayland;
+          under X11 the portal usually still works, but coordinates and the
+          overlay come from a different place and oddities get much easier to
+          explain if this is on the card. */}
+      {!state.wayland && (
+        <Row
+          icon={
+            <span className="text-amber-500">
+              <TriangleAlert size={15} />
+            </span>
+          }
+          title="session type"
+          description={`this is an x11 session, not wayland. conduit's linux backend is built for wayland — log in to a wayland session for the overlay and coordinates to behave.`}
+        />
+      )}
+    </>
   );
 }

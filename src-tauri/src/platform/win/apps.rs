@@ -498,3 +498,8 @@ pub fn notify(title: &str, body: &str) -> Result<(), String> {
         .show()
         .map_err(|e| format!("could not post notification: {e}"))
 }
+
+/// See [`crate::platform::types::OwnWindows`]. `GetWindowRect` answers for a window the process owns, so Tauri's numbers are the OS's own.
+pub fn own_windows() -> crate::platform::types::OwnWindows {
+    crate::platform::types::OwnWindows::AskTauri
+}

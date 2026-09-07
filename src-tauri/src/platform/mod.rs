@@ -1,7 +1,7 @@
 //! The platform layer. Everything that touches an OS API lives behind this
 //! module, so the MCP tools above it stay readable.
 //!
-//! Both backends expose the same module names with the same signatures, so
+//! All three backends expose the same module names with the same signatures, so
 //! `mcp/tools.rs` contains no `#[cfg]` at all — it just calls
 //! `platform::input::click` and lets the linker decide which one that is.
 //! [`contract`] pins that promise at compile time.
@@ -27,3 +27,8 @@ pub use mac::*;
 mod win;
 #[cfg(target_os = "windows")]
 pub use win::*;
+
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+pub use linux::*;

@@ -1,7 +1,7 @@
 [package]
 name = "conduit"
 version = "0.1.0"
-description = "let ai agents use your mac"
+description = "let ai agents use your computer"
 edition = "2024"
 rust-version = "1.85"
 
@@ -143,6 +143,66 @@ tauri-winrt-notification = "0.7"
 # without this, launching conduit twice leaves a second process that cannot bind
 # port 6767 and shows a broken window with no explanation — and because closing
 # hides to the tray, they accumulate.
+tauri-plugin-single-instance = "2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# D-Bus. Everything Wayland withholds from a plain client — input injection,
+# screen capture, window geometry, the accessibility tree — is reached over the
+# bus instead, so this is the single most load-bearing dependency in the port.
+#
+# The *blocking* API deliberately, and default features (async-io) rather than
+# `tokio`: `platform::*` is a synchronous contract on all three platforms, and
+# zbus's tokio integration panics if you block on it from inside a tokio worker,
+# which is exactly where every tool call runs.
+zbus = "5"
+
+# Screen capture. The portal hands over a PipeWire remote; frames arrive on
+# their own thread and the newest one is what `capture` crops. See
+# `linux/capture.rs` for why a live stream beats a per-call screenshot here.
+pipewire = "0.10"
+
+# Reading the pointer for the panic stop. Wayland has no passive key listener
+# by design, so the hold-Escape watcher reads evdev directly — see
+# `linux/panic_stop.rs`, which explains why a global shortcut is not an option.
+evdev = "0.13"
+
+# Clipboard, over wlr-data-control. Needs no focused surface, which a clipboard
+# tool driven by an agent never has.
+wl-clipboard-rs = "0.9"
+
+# Display geometry, and the GtkWindow handle the layer-shell calls in
+# `chrome.rs` need. Pinned to the version tao already resolves, so
+# `window.gtk_window()` hands back a type from *this* crate rather than a
+# structurally identical one the compiler refuses to unify.
+gtk = "0.18"
+
+# Agent logos, resolved out of the active icon theme rather than bundled — the
+# same rule the macOS and Windows backends follow.
+freedesktop-icons = "0.4"
+# Breeze ships SVG, so an icon theme lookup that cannot rasterize returns
+# nothing on the user's own desktop.
+resvg = "0.48"
+
+# Synthetic input on wlroots compositors — see `platform/linux/wlroots.rs`.
+#
+# The portal's RemoteDesktop interface is the only *standard* input route on
+# Wayland, and a large part of the desktop does not implement it: Hyprland, sway
+# and every other wlroots compositor ship no backend for it, so on those
+# machines the portal answers `UnknownMethod` and conduit cannot move a pointer
+# at all. These two protocols are what those compositors offer instead, and they
+# need no consent dialog because the compositor grants them per client.
+wayland-client = "0.31"
+# `zwlr_virtual_pointer_manager_v1`.
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+# `zwp_virtual_keyboard_manager_v1`. A separate crate only because it is a
+# staging protocol rather than a wlr one; the compositors are the same.
+wayland-protocols-misc = { version = "0.3", features = ["client"] }
+
+libc = "0.2"
+
+# Same reason as on Windows: linux has no Launch Services rule that activates
+# the running copy, so a second launch would leave a process that cannot bind
+# port 6767 — and because closing hides to the tray, they accumulate.
 tauri-plugin-single-instance = "2"
 
 [profile.release]

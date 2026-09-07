@@ -1,8 +1,8 @@
 name: build
 
-# Every push and PR gets a real build on both platforms — conduit is one
-# codebase with two backends, and the whole point of `platform/contract.rs` is
-# that a change which compiles on one must compile on the other. CI is where
+# Every push and PR gets a real build on all three platforms — conduit is one
+# codebase with three backends, and the whole point of `platform/contract.rs` is
+# that a change which compiles on one must compile on the others. CI is where
 # that gets caught, since most work happens on a single machine.
 #
 # Pushing a `v*` tag additionally cuts a release: the same zips, attached to a
@@ -38,6 +38,14 @@ jobs:
             # One .app that runs on both Apple Silicon and Intel, rather than
             # asking people which Mac they have.
             args: "--target universal-apple-darwin"
+          - os: ubuntu-22.04
+            label: linux
+            # Pinned to 22.04, not `ubuntu-latest`: glibc and WebKitGTK are
+            # forward-compatible but not backward, so a binary built on 24.04
+            # refuses to start on anything older. Building against the oldest
+            # webkit2gtk-4.1 still supported is what makes one zip run
+            # everywhere.
+            args: ""
 
     steps:
       - uses: actions/checkout@v4
@@ -50,6 +58,24 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+
+      - name: Install the Linux build dependencies
+        # Tauri needs WebKitGTK and its GTK stack to link. `libgtk-layer-shell`
+        # is deliberately absent: conduit dlopens it at runtime so the binary
+        # runs on machines without it, and linking it here would undo that.
+        # libpipewire and clang are for the capture backend's bindgen step.
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libpipewire-0.3-dev \
+            libclang-dev \
+            libxdo-dev \
+            zip
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -130,8 +156,9 @@ jobs:
             echo
             echo "- **Windows** — unzip and run \`conduit.exe\`. Needs the WebView2 runtime, which Windows 11 already has."
             echo "- **macOS** — unzip and move \`conduit.app\` to Applications. Grant Accessibility and Screen Recording when asked."
+            echo "- **Linux** — unzip, \`chmod +x conduit\`, run it. Wayland only. Answer the screen-sharing prompt each launch; the portal refuses to make that grant permanent."
             echo
-            echo "Neither build is code-signed, so the first launch needs a click past SmartScreen or Gatekeeper."
+            echo "No build is code-signed, so the first launch on Windows or macOS needs a click past SmartScreen or Gatekeeper."
           } > notes.md
 
           cat notes.md

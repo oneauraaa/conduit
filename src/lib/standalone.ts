@@ -4,10 +4,12 @@
  * Rust core. Inside the real app none of this is ever reached.
  */
 
-import { isWindows } from "./platform";
+import { isLinux, isWindows } from "./platform";
 import type {
   AgentTarget,
   ControlState,
+  HyprlandState,
+  Keybind,
   Readiness,
   ServerState,
   Settings,
@@ -25,9 +27,13 @@ export const server: ServerState = {
 };
 
 /**
- * Which readiness card to preview. The two are structurally different, so
- * `?platform=windows` (see `lib/platform.ts`) is the only way to see the
- * Windows one from a Mac, or the macOS one from a PC, without a rebuild.
+ * Which readiness card to preview. All three are structurally different, so
+ * `?platform=windows|linux|macos` (see `lib/platform.ts`) is the only way to
+ * review one from a machine running another, without a rebuild.
+ *
+ * Each is set to the state where its card has the most to say, rather than to
+ * a fully-green one — a card that only ever renders "everything is fine" is the
+ * one that gets shipped broken.
  */
 export const readiness: Readiness = isWindows
   ? {
@@ -40,11 +46,33 @@ export const readiness: Readiness = isWindows
       captureSupported: true,
       borderlessCapture: true,
     }
-  : {
-      platform: "macos",
-      accessibility: true,
-      screenRecording: false,
-    };
+  : isLinux
+    ? {
+        platform: "linux",
+        desktop: "KDE",
+        wayland: true,
+        // Granted and capturing, but with the two opt-in capabilities off —
+        // which is exactly what a fresh plasma install looks like.
+        portalReady: true,
+        portalError: null,
+        // Plasma's portal carries input too, so this route matches it.
+        inputRoute: "portal",
+        inputReady: true,
+        inputError: null,
+        captureReady: true,
+        windowManagement: true,
+        accessibilityTree: false,
+        accessibilityHint:
+          "no application is publishing an accessibility tree. turn it on with:\n  gsettings set org.gnome.desktop.interface toolkit-accessibility true\nand add QT_ACCESSIBILITY=1 to ~/.config/environment.d/ for qt and kde apps, then log back in. screenshots and clicking work without it.",
+        panicStop: false,
+        panicStopHint:
+          "hold-escape needs read access to the keyboard device. run:\n  sudo usermod -aG input you\nthen log out and back in. until then, the stop button on the pill is the way to take control back.",
+      }
+    : {
+        platform: "macos",
+        accessibility: true,
+        screenRecording: false,
+      };
 
 export const settings: Settings = {
   defaultAccess: "full",
@@ -60,7 +88,7 @@ export const settings: Settings = {
   startHidden: false,
 };
 
-const host = isWindows ? "desktop-7f2k1" : "mac-studio";
+const host = isWindows ? "desktop-7f2k1" : isLinux ? "cachyos-box" : "mac-studio";
 
 export const tailscale: TailscaleState = {
   installed: true,
@@ -69,6 +97,110 @@ export const tailscale: TailscaleState = {
   sharing: true,
   publicUrl: `https://${host}.tail9c2f1.ts.net/9f2c41ab77e0d5384b1e6ca90f37de52/mcp`,
   error: null,
+};
+
+/**
+ * A slice of a real Hyprland config, chosen for the cases that are easy to get
+ * wrong rather than for coverage: a described bind, a chord bound twice, a
+ * mouse bind, a bare media key, and one line the compositor rejected.
+ *
+ * Only on Linux — `available: false` is what every other platform reports, and
+ * it is what grays the tab out, so `?platform=macos` reviews that state.
+ */
+function bind(
+  mods: string[],
+  key: string,
+  dispatcher: string,
+  args: string,
+  extra: Partial<Keybind> = {},
+): Keybind {
+  return {
+    id: `${mods.join("+")}-${key}-${dispatcher}`,
+    mods,
+    modAlias: mods.length ? "$mainMod" : null,
+    key,
+    dispatcher,
+    args,
+    description: null,
+    flags: [],
+    submap: null,
+    section: null,
+    sourceFile: "/home/you/.config/hypr/hyprland.conf",
+    sourceLine: 1,
+    active: true,
+    alsoFires: [],
+    ...extra,
+  };
+}
+
+const S = ["SUPER"];
+const sampleBinds: Keybind[] = [
+  bind(S, "Q", "exec", "kitty", { section: "keybindings" }),
+  bind(S, "C", "killactive", "", { section: "keybindings" }),
+  bind(S, "E", "exec", "env QT_QPA_PLATFORMTHEME=kde dolphin", { section: "keybindings" }),
+  bind(S, "R", "exec", "caelestia shell drawers toggle launcher", { section: "keybindings" }),
+  // The same chord bound twice: hyprland runs both, top to bottom.
+  bind(S, "L", "exec", "hyprlock", {
+    section: "keybindings",
+    alsoFires: ["global caelestia:lock"],
+  }),
+  bind(S, "L", "global", "caelestia:lock", { alsoFires: ["exec hyprlock"] }),
+  bind(S, "left", "movefocus", "l", { section: "move focus with mainmod + arrow keys" }),
+  bind(S, "right", "movefocus", "r", { section: "move focus with mainmod + arrow keys" }),
+  bind(S, "1", "workspace", "1", { section: "switch workspaces with mainmod + [0-9]" }),
+  bind(S, "2", "workspace", "2", { section: "switch workspaces with mainmod + [0-9]" }),
+  bind(["SUPER", "SHIFT"], "1", "movetoworkspace", "1", {
+    section: "move active window to a workspace",
+  }),
+  bind(S, "mouse:272", "movewindow", "", {
+    section: "move/resize windows with mainmod + lmb/rmb",
+    flags: ["mouse"],
+  }),
+  bind([], "XF86AudioRaiseVolume", "exec", "wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%+", {
+    modAlias: null,
+    section: "multimedia keys",
+    flags: ["locked", "repeat"],
+  }),
+  bind([], "XF86AudioPlay", "exec", "playerctl play-pause", {
+    modAlias: null,
+    section: "multimedia keys",
+    flags: ["locked"],
+  }),
+  bind(["SUPER", "SHIFT"], "P", "exec", "hyprshot -m region", {
+    section: "screenshots",
+    description: "select a region",
+  }),
+  bind(["SUPER", "CTRL"], "P", "exec", "hyprshot -m output", {
+    section: "screenshots",
+    description: "whole screen",
+  }),
+  // Declared in the config, rejected by the compositor.
+  bind(["SUPER", "ALT"], "Z", "exec", "a-tool-that-does-not-exist", {
+    section: "screenshots",
+    active: false,
+  }),
+];
+
+/** `?hypr=empty|error|mismatch` forces the states a healthy machine never shows. */
+const hyprDemo = isStandalone
+  ? new URLSearchParams(window.location.search).get("hypr")
+  : null;
+
+export const hyprland: HyprlandState = {
+  available: isLinux,
+  version: "v0.56.2",
+  configPath: "/home/you/.config/hypr/hyprland.conf",
+  configKind: "conf",
+  activeConfigPath:
+    hyprDemo === "mismatch"
+      ? "/home/you/.config/hypr/hyprland.lua"
+      : "/home/you/.config/hypr/hyprland.conf",
+  mismatch:
+    hyprDemo === "mismatch"
+      ? "showing /home/you/.config/hypr/hyprland.conf, but hyprland is running /home/you/.config/hypr/hyprland.lua"
+      : null,
+  binds: hyprDemo === "empty" ? [] : sampleBinds,
+  error: hyprDemo === "error" ? "could not run hyprctl: no such file or directory" : null,
 };
 
 export const control: ControlState = {
@@ -102,6 +234,7 @@ export const catalog: ToolDef[] = [
   { name: "run_shell", group: "system", summary: "run a shell command and capture its output", risky: true },
   { name: "wait", group: "system", summary: "pause, to let the ui settle", risky: false },
   { name: "notify", group: "system", summary: "post a notification", risky: false },
+  { name: "list_keybinds", group: "system", summary: "the keyboard shortcuts the user has bound", risky: false },
 ];
 
 const home = isWindows ? "C:/Users/you" : "/Users/you";

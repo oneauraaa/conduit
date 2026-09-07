@@ -21,7 +21,7 @@ use serde::Deserialize;
 use tauri::Emitter;
 
 use crate::platform::types::{Button, display_at};
-use crate::platform::{apps, ax, capture, clipboard, input, screen, shell};
+use crate::platform::{apps, ax, capture, clipboard, host, input, screen, shell};
 use crate::mcp::gate::{self, CallCtx};
 use crate::state::{CursorEvent, PulseEvent, Shared};
 
@@ -83,7 +83,7 @@ pub struct ScrollArgs {
     /// Horizontal scroll in points. Positive scrolls right.
     #[serde(default)]
     pub dx: Option<i32>,
-    /// Vertical scroll in points. Positive scrolls up, matching macOS.
+    /// Vertical scroll in points. Positive scrolls up.
     #[serde(default)]
     pub dy: Option<i32>,
     /// Move here before scrolling, so the right surface receives it.
@@ -104,8 +104,9 @@ pub struct KeyArgs {
     /// Key name, e.g. "return", "tab", "escape", "a", "f5", "left".
     pub key: String,
     /// Any of "cmd", "ctrl", "shift", "alt", "win", "fn". "cmd" is the shortcut
-    /// modifier — Command on macOS, Control on Windows — so "cmd+c" is copy on
-    /// both. "win"/"super" is the logo key.
+    /// modifier of whatever platform this is — Command on macOS, Control on
+    /// Windows and Linux — so "cmd+c" is copy on all three. "win"/"super" is
+    /// the logo key. The handshake instructions name the real key.
     #[serde(default)]
     pub modifiers: Vec<String>,
 }
@@ -152,7 +153,9 @@ pub struct TextArgs {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ShellArgs {
-    /// The command line. Run through zsh on macOS, PowerShell on Windows.
+    /// The command line. Run through the platform's shell: zsh on macOS,
+    /// PowerShell on Windows, the user's login shell on Linux. The handshake
+    /// instructions name the one on this machine.
     pub command: String,
     /// Give up after this many seconds. Defaults to 30.
     #[serde(default)]
@@ -684,7 +687,7 @@ impl Conduit {
     /* ── accessibility ── */
 
     #[tool(
-        description = "Read on-screen text and control bounds from the macOS accessibility tree. \
+        description = "Read on-screen text and control bounds from the accessibility tree. \
                        Strongly prefer this over screenshot for finding buttons, fields and \
                        labels: it returns exact strings and exact coordinates instead of making \
                        you estimate from pixels. Each element includes centerX/centerY you can \
@@ -846,7 +849,7 @@ impl Conduit {
         .await
     }
 
-    #[tool(description = "Post a macOS notification.")]
+    #[tool(description = "Post a desktop notification.")]
     async fn notify(
         &self,
         Parameters(args): Parameters<NotifyArgs>,
@@ -863,25 +866,149 @@ impl Conduit {
         )
         .await
     }
+
+    #[tool(
+        description = "List the user's own keyboard shortcuts, on machines whose desktop \
+                       publishes them. Call this before synthesizing any modifier combination \
+                       with key_press: these chords are the user's own rather than the \
+                       defaults, so one that is not listed here most likely does nothing. \
+                       Says so plainly on a desktop that has no such list."
+    )]
+    async fn list_keybinds(
+        &self,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        let agent = self.agent(&ctx);
+        gate::run(
+            &self.state,
+            CallCtx { tool: "list_keybinds", detail: None, agent },
+            || async {
+                // Spawns hyprctl and reads a config file, neither of which
+                // belongs on a tokio worker.
+                let state = tokio::task::spawn_blocking(crate::hyprland::snapshot)
+                    .await
+                    .map_err(|e| fail(format!("could not read the keybinds: {e}")))?;
+
+                if !state.available {
+                    return ok(
+                        "this desktop does not publish a keybind list conduit can read. \
+                         hyprland is the one it knows how to ask.",
+                    );
+                }
+                json_ok(&crate::hyprland::agent_view(&state))
+            },
+        )
+        .await
+    }
+}
+
+/// The first thing an agent reads, and the only place in the MCP surface that
+/// can name this machine.
+///
+/// It is built at runtime because everything OS-specific has to be: tool
+/// descriptions are literals inside an attribute macro, so a `#[cfg]` cannot
+/// reach them and they are written OS-neutrally instead. That leaves this
+/// string carrying the whole of "what am I driving" — which is why it opens by
+/// naming the platform outright rather than leaving the agent to infer it.
+fn instructions() -> String {
+    let mut text = format!(
+        "conduit gives you this {device}, the way a person uses it. \
+         You are driving {host} — not macOS unless that is what it says. \
+         Keep that in mind for every path, application name and keyboard \
+         shortcut you reach for.\n\n\
+         Coordinates are logical points with the origin at the top-left of the primary \
+         display; list_displays tells you how the screens are arranged.\n\n\
+         A good loop is: read_screen_text or find_element to locate a control, click its \
+         centerX/centerY, then screenshot only if you need to confirm something visual. \
+         Reaching for screenshot first is slower, costlier and less accurate. \
+         read_screen_text reads {ax_source}.\n\n\
+         The \"cmd\" modifier means {modifier} on this machine, so \"cmd+c\" is copy here. \
+         run_shell runs commands through {shell}.\n\n\
+         The user can see everything you do — the screen glows and a pill above {anchor} \
+         shows your current action. They can revoke a tool or stop you at any moment, so \
+         a refusal is a real answer from a real person, not a bug to route around.",
+        device = host::DEVICE,
+        host = host::description(),
+        ax_source = host::AX_SOURCE,
+        modifier = host::SHORTCUT_MODIFIER,
+        shell = host::SHELL,
+        anchor = host::CHROME_ANCHOR,
+    );
+
+    // The keybind list is worth naming here rather than leaving to the tool
+    // list, because the moment an agent needs it is the moment *before* it
+    // reaches for key_press — and by then it has already guessed.
+    if crate::hyprland::available() {
+        text.push_str(
+            "\n\nThis desktop is Hyprland and the user has their own keyboard shortcuts. \
+             Call list_keybinds before you synthesize any SUPER combination, and use their \
+             binding rather than inventing one: a chord they have not bound does nothing.",
+        );
+    }
+
+    text
 }
 
 #[tool_handler]
 impl ServerHandler for Conduit {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::from_build_env())
+            // Not `from_build_env()`: that macro reads `CARGO_PKG_NAME` where it
+            // is *expanded*, which is inside rmcp — so conduit introduced itself
+            // to every agent as "rmcp 3.1.2".
+            .with_server_info(Implementation::new("conduit", env!("CARGO_PKG_VERSION")))
             .with_protocol_version(ProtocolVersion::V_2025_06_18)
-            .with_instructions(
-                "conduit gives you this Mac, the way a person uses it.\n\n\
-                 Coordinates are logical points with the origin at the top-left of the primary \
-                 display; list_displays tells you how the screens are arranged.\n\n\
-                 A good loop is: read_screen_text or find_element to locate a control, click its \
-                 centerX/centerY, then screenshot only if you need to confirm something visual. \
-                 Reaching for screenshot first is slower, costlier and less accurate.\n\n\
-                 The user can see everything you do — the screen glows and a pill above the Dock \
-                 shows your current action. They can revoke a tool or stop you at any moment, so \
-                 a refusal is a real answer from a real person, not a bug to route around."
-                    .to_string(),
-            )
+            .with_instructions(instructions())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::instructions;
+    use crate::platform::host;
+
+    /// The handshake is the only place in the MCP surface that can name this
+    /// machine — tool descriptions are literals inside an attribute macro, so
+    /// no `#[cfg]` reaches them. If this string stops saying what the platform
+    /// is, nothing else says it either.
+    #[test]
+    fn the_handshake_names_this_platform() {
+        let text = instructions();
+        assert!(text.contains(&host::description()), "{text}");
+        assert!(text.contains(host::DEVICE), "{text}");
+        assert!(text.contains(host::SHORTCUT_MODIFIER), "{text}");
+        assert!(text.contains(host::SHELL), "{text}");
+        assert!(text.contains(host::CHROME_ANCHOR), "{text}");
+    }
+
+    /// An agent reaches for a shortcut before it would ever think to browse the
+    /// tool list, so the pointer has to be in the handshake. On a desktop with
+    /// no keybind list to read, it must not appear at all.
+    #[test]
+    fn hyprland_machines_are_pointed_at_their_keybinds() {
+        let text = instructions();
+        assert_eq!(
+            text.contains("list_keybinds"),
+            crate::hyprland::available(),
+            "{text}"
+        );
+    }
+
+    /// The regression this whole module exists for. conduit opened with
+    /// "conduit gives you this Mac" on every platform, and agents believed it:
+    /// they reached for Command, looked for the Dock, and wrote zsh into
+    /// `run_shell` on machines that had none of the three.
+    ///
+    /// Only the sentence warning an agent *not* to assume macOS may mention it,
+    /// so the check is for the claims rather than the word.
+    #[test]
+    fn nothing_claims_a_mac_unless_this_is_one() {
+        if cfg!(target_os = "macos") {
+            return;
+        }
+        let text = instructions();
+        for claim in ["this Mac", "the Dock", "Command on this machine"] {
+            assert!(!text.contains(claim), "still says {claim:?}:\n{text}");
+        }
     }
 }

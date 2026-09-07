@@ -10,6 +10,7 @@ pub mod ax;
 pub mod capture;
 pub mod cf;
 pub mod clipboard;
+pub mod host;
 pub mod input;
 pub mod keycodes;
 pub mod panic_stop;

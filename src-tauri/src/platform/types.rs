@@ -60,6 +60,28 @@ pub fn display_at(displays: &[Display], x: f64, y: f64) -> usize {
         .unwrap_or(0)
 }
 
+/// Where conduit's own windows are, for [`crate::chrome::point_hits_conduit`].
+///
+/// Three answers rather than a `Vec`, because "I do not know" and "there are
+/// none" have to be told apart: the first must not be read as *"nothing here is
+/// conduit, click freely"*, and the second is a real state — every window
+/// hidden to the tray.
+// Each build constructs only its own platform's variant, so the other two
+// always look dead. That is the point of a shared enum.
+#[allow(dead_code)]
+pub enum OwnWindows {
+    /// The window manager's own answer, in conduit's coordinate space.
+    Rects(Vec<(f64, f64, f64, f64)>),
+    /// This platform reports its own window geometry correctly, so Tauri's
+    /// numbers are authoritative and the caller should use them.
+    AskTauri,
+    /// Nothing on this system will say. Wayland withholds a client's own
+    /// position by design — `outer_position()` answers `(0, 0)` rather than
+    /// failing — so on a compositor conduit cannot interrogate there is no
+    /// honest rectangle to guard.
+    Unknown,
+}
+
 /* ── capture ── */
 
 pub struct Shot {

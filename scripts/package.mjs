@@ -8,6 +8,12 @@
 // macOS ships `conduit.app`, zipped with `ditto` rather than `zip`. A .app is a
 // directory full of symlinks and extended attributes, and plain `zip` flattens
 // both, which breaks the bundle (and any signature on it).
+//
+// Linux ships the bare ELF binary, like Windows. No .deb or AppImage: conduit
+// links against the WebKitGTK and GTK already on any desktop that can run a
+// browser, and its genuinely optional pieces (gtk-layer-shell) are dlopened at
+// runtime rather than linked, so there is nothing for a package manager to
+// resolve. `zip -j` because the binary must sit at the archive root.
 
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, rmSync, existsSync, statSync } from "node:fs";
@@ -20,9 +26,12 @@ const outDir = join(root, "dist-release");
 
 const isWindows = process.platform === "win32";
 const isMac = process.platform === "darwin";
+const isLinux = process.platform === "linux";
 
-if (!isWindows && !isMac) {
-  console.error(`conduit packages for windows and macos; this is ${process.platform}`);
+if (!isWindows && !isMac && !isLinux) {
+  console.error(
+    `conduit packages for windows, macos and linux; this is ${process.platform}`,
+  );
   process.exit(1);
 }
 
@@ -43,7 +52,7 @@ mkdirSync(outDir, { recursive: true });
 
 /* ── build ── */
 
-if (isWindows) {
+if (isWindows || isLinux) {
   // --no-bundle: there is no bundler target we want. It still builds the
   // release binary and still runs beforeBuildCommand, so the frontend is fresh.
   run("pnpm", ["tauri", "build", "--no-bundle", ...extraArgs]);
@@ -69,6 +78,9 @@ let zipName;
 if (isWindows) {
   payload = join(releaseDir, "conduit.exe");
   zipName = `conduit-${version}-windows-${arch}.zip`;
+} else if (isLinux) {
+  payload = join(releaseDir, "conduit");
+  zipName = `conduit-${version}-linux-${arch}.zip`;
 } else {
   payload = join(releaseDir, "bundle", "macos", "conduit.app");
   zipName = `conduit-${version}-macos-${arch}.zip`;
@@ -91,6 +103,10 @@ if (isWindows) {
     "-Command",
     `Compress-Archive -Path '${payload}' -DestinationPath '${zipPath}' -Force`,
   ]);
+} else if (isLinux) {
+  // -j drops the directory names, so the binary lands at the archive root.
+  // Without it the zip carries the whole src-tauri/target/release path.
+  run("zip", ["-j", "-9", zipPath, payload]);
 } else {
   // --keepParent so the archive contains conduit.app rather than its innards.
   run("ditto", ["-c", "-k", "--sequesterRsrc", "--keepParent", payload, zipPath]);

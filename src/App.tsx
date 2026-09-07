@@ -5,11 +5,12 @@ import { TitleBar } from "@/components/TitleBar";
 import { ServerTab } from "@/tabs/ServerTab";
 import { ToolsTab } from "@/tabs/ToolsTab";
 import { AgentsTab } from "@/tabs/AgentsTab";
+import { HyprlandTab } from "@/tabs/HyprlandTab";
 import { TailscaleTab } from "@/tabs/TailscaleTab";
 import { SettingsTab } from "@/tabs/SettingsTab";
-import { getServerState, subscribe } from "@/lib/ipc";
+import { getHyprlandState, getServerState, subscribe } from "@/lib/ipc";
 import { isStandalone } from "@/lib/standalone";
-import type { ServerState } from "@/lib/types";
+import type { HyprlandState, ServerState } from "@/lib/types";
 
 const INITIAL_SERVER: ServerState = {
   status: "stopped",
@@ -26,7 +27,11 @@ const INITIAL_SERVER: ServerState = {
 function initialTab(): Tab {
   if (!isStandalone) return "server";
   const t = new URLSearchParams(window.location.search).get("tab");
-  return t === "tools" || t === "agents" || t === "tailscale" || t === "settings"
+  return t === "tools" ||
+    t === "agents" ||
+    t === "hyprland" ||
+    t === "tailscale" ||
+    t === "settings"
     ? t
     : "server";
 }
@@ -34,16 +39,29 @@ function initialTab(): Tab {
 export default function App() {
   const [tab, setTab] = useState<Tab>(initialTab);
   const [server, setServer] = useState<ServerState>(INITIAL_SERVER);
+  const [hyprland, setHyprland] = useState<HyprlandState | null>(null);
 
   useEffect(() => {
     void getServerState().then(setServer).catch(() => {});
     return subscribe("server:state", setServer);
   }, []);
 
+  // Read once: the tab refreshes itself, and this copy exists only to know
+  // whether the sidebar entry is live. Null until it answers, which grays the
+  // tab for that first moment rather than letting it flash enabled.
+  useEffect(() => {
+    void getHyprlandState().then(setHyprland).catch(() => {});
+  }, []);
+
   return (
     <div className="relative flex h-full overflow-hidden rounded-[14px] border hairline bg-[rgb(var(--surface))] app-shadow">
       <TitleBar />
-      <Sidebar tab={tab} onTab={setTab} serverStatus={server.status} />
+      <Sidebar
+        tab={tab}
+        onTab={setTab}
+        serverStatus={server.status}
+        disabled={{ hyprland: !hyprland?.available }}
+      />
 
       <main className="relative flex-1 overflow-hidden">
         <AnimatePresence mode="wait" initial={false}>
@@ -58,6 +76,7 @@ export default function App() {
             {tab === "server" && <ServerTab server={server} />}
             {tab === "tools" && <ToolsTab />}
             {tab === "agents" && <AgentsTab server={server} />}
+            {tab === "hyprland" && <HyprlandTab />}
             {tab === "tailscale" && <TailscaleTab />}
             {tab === "settings" && <SettingsTab />}
           </motion.div>

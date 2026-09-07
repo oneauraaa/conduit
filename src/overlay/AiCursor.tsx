@@ -35,6 +35,8 @@ export function AiCursor({ active, demo = false }: { active: boolean; demo?: boo
   const trail = useRef<Sample[]>([]);
   const ripples = useRef<Ripple[]>([]);
   const raf = useRef(0);
+  /** Wakes the draw loop. Set once the canvas effect has run. */
+  const wake = useRef<(() => void) | null>(null);
 
   // In demo mode, fake a swipe into place so the trail and a click ripple are
   // both on screen for the screenshot.
@@ -59,10 +61,12 @@ export function AiCursor({ active, demo = false }: { active: boolean; demo?: boo
     const offCursor = subscribe("control:cursor", ({ x, y }) => {
       pos.current = { x, y };
       trail.current.push({ x, y, t: performance.now() });
+      wake.current?.();
     });
     const offPulse = subscribe("control:pulse", ({ kind }) => {
       const p = pos.current;
       if (p) ripples.current.push({ x: p.x, y: p.y, t: performance.now(), kind });
+      wake.current?.();
     });
     return () => {
       offCursor();
@@ -76,6 +80,9 @@ export function AiCursor({ active, demo = false }: { active: boolean; demo?: boo
       trail.current = [];
       ripples.current = [];
     }
+    // Either way one frame is owed: the one that wipes the last cursor off, or
+    // the first of a new session.
+    wake.current?.();
   }, [active]);
 
   useEffect(() => {
@@ -93,8 +100,29 @@ export function AiCursor({ active, demo = false }: { active: boolean; demo?: boo
     resize();
     window.addEventListener("resize", resize);
 
+    // Whether a frame is already queued. Without it, an event burst — and
+    // `control:cursor` arrives once per interpolated step of a glide — would
+    // queue one loop per event.
+    let queued = false;
+
+    /**
+     * Draw one frame, and schedule the next only if something is still moving.
+     *
+     * The loop used to be unconditional: `requestAnimationFrame` re-armed at
+     * the top of `draw`, from mount, forever. That meant a full-screen
+     * `clearRect` plus a canvas re-upload every frame for the entire life of
+     * the process — while the overlay was hidden, and while a session sat
+     * still with the cursor parked. On a 2560×1440 display at 280Hz that is
+     * most of a CPU core spent compositing nothing, and it is felt: the glow
+     * this canvas sits on top of stutters.
+     *
+     * The trail and the ripples are the only things that age, so they are
+     * exactly the condition for wanting another frame. Everything else that
+     * changes the picture — a cursor move, a click, the session ending —
+     * arrives as an event, and those call `wake`.
+     */
     const draw = () => {
-      raf.current = requestAnimationFrame(draw);
+      queued = false;
       const now = performance.now();
       const w = window.innerWidth;
       const h = window.innerHeight;
@@ -173,10 +201,24 @@ export function AiCursor({ active, demo = false }: { active: boolean; demo?: boo
         ctx.arc(p.x, p.y, 7 * scale, 0, Math.PI * 2);
         ctx.stroke();
       }
+
+      // Only the ageing things need another frame. A parked cursor is a still
+      // picture, and the canvas already holds it.
+      if (trail.current.length > 0 || ripples.current.length > 0) schedule();
     };
 
-    raf.current = requestAnimationFrame(draw);
+    const schedule = () => {
+      if (queued) return;
+      queued = true;
+      raf.current = requestAnimationFrame(draw);
+    };
+
+    wake.current = schedule;
+    // The first frame: whatever is on screen when this mounts.
+    schedule();
+
     return () => {
+      wake.current = null;
       cancelAnimationFrame(raf.current);
       window.removeEventListener("resize", resize);
     };

@@ -1,6 +1,7 @@
 mod agents;
 mod chrome;
 mod commands;
+mod hyprland;
 mod mcp;
 mod panic_stop;
 mod platform;
@@ -27,8 +28,40 @@ fn launched_at_login() -> bool {
     std::env::args().any(|arg| arg == HIDDEN_FLAG)
 }
 
+/// Turns off WebKitGTK's DMA-BUF renderer.
+///
+/// Without this, conduit dies at startup on KWin with
+/// `wp_linux_drm_syncobj_surface_v1: explicit sync is used, but no acquire
+/// point is set` — a protocol error the compositor answers by dropping the
+/// connection, which surfaces as `Gdk-Message: Error 71 (Protocol error)` and
+/// no window at all.
+///
+/// It is not conduit's bug and there is nothing to fix on this side: WebKitGTK
+/// commits a buffer through the explicit-sync protocol without attaching an
+/// acquire point, and KWin is right to refuse it. Every Tauri and GTK-webview
+/// app on Wayland hits it. The SHM path this falls back to is slower, which for
+/// four small mostly-static webviews is not a cost anyone can perceive.
+///
+/// Set before anything touches GTK, and only if the user has not chosen a value
+/// — someone on a compositor where the DMA-BUF path works should be able to
+/// keep it.
+#[cfg(target_os = "linux")]
+fn appease_webkit() {
+    for key in ["WEBKIT_DISABLE_DMABUF_RENDERER"] {
+        if std::env::var_os(key).is_none() {
+            // SAFETY: single-threaded here — this runs as the first statement
+            // of `run`, before the Tauri builder, any GTK call, or any thread
+            // conduit spawns.
+            unsafe { std::env::set_var(key, "1") };
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(target_os = "linux")]
+    appease_webkit();
+
     // Without a subscriber, every tracing::warn! in the app goes nowhere — which
     // is exactly the wrong thing when a window silently fails to create.
     // RUST_LOG overrides; default is warnings from conduit itself.
@@ -43,9 +76,11 @@ pub fn run() {
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default();
 
-    // Windows only — see the Cargo.toml note. Launching conduit again just
-    // brings the running one back from the tray, which is what the user meant.
-    #[cfg(target_os = "windows")]
+    // Windows and Linux — see the Cargo.toml note. macOS gets this free from
+    // Launch Services; neither of the other two has an equivalent rule, so
+    // without it a second launch leaves a process that cannot bind the port and
+    // shows a broken window. Because closing hides to the tray, they accumulate.
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             chrome::show_main(app);
@@ -91,6 +126,7 @@ pub fn run() {
             commands::install_agent,
             commands::uninstall_agent,
             commands::get_tailscale_state,
+            commands::get_hyprland_state,
             commands::enable_remote,
             commands::disable_remote,
             commands::regenerate_remote_token,
@@ -109,6 +145,14 @@ pub fn run() {
             // has already been a wrong answer once, when a WinRT probe failed
             // for want of a COM apartment and was read as an old Windows.
             tracing::info!(readiness = ?platform::permissions::snapshot(), "readiness");
+
+            // Wayland withholds input and capture behind a consent dialog that
+            // cannot be made permanent, so it has to be asked for on every
+            // launch. Asking *now* puts it beside the window that explains what
+            // conduit is, rather than under whatever an agent is doing twenty
+            // minutes in. No-op on the other two platforms.
+            #[cfg(target_os = "linux")]
+            platform::portal::warm_up();
 
             // Overlay and pill are built up front and kept hidden, so the first
             // takeover doesn't pay webview startup cost mid-action.
@@ -146,9 +190,10 @@ pub fn run() {
                 });
             }
 
-            // Hold-Escape panic stop. On macOS this needs Accessibility, which
-            // the user may not have granted yet — retry once it appears rather
-            // than losing the shortcut for the whole run.
+            // Hold-Escape panic stop. Every platform can withhold it: macOS
+            // until Accessibility is granted, linux until the user is in the
+            // `input` group. Retry rather than losing the shortcut for the whole
+            // run — and until it lands, the pill's Stop button is the way out.
             let panic_state = shared.clone();
             tauri::async_runtime::spawn(async move {
                 loop {
@@ -175,6 +220,11 @@ pub fn run() {
             // Re-assert the login entry. The setting is conduit's record of
             // what the user asked for; the registry key or LaunchAgent is the
             // OS's, and something else may have removed it since.
+            //
+            // In a development build this is where a stale entry written by an
+            // earlier dev run gets torn out — see `apply_autostart` for why one
+            // can only ever be broken. The setting survives, so a release build
+            // registers the right binary here instead.
             if shared.settings().start_on_login {
                 if let Err(e) = commands::apply_autostart(&handle, true) {
                     tracing::warn!("{e}");

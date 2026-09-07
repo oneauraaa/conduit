@@ -79,6 +79,12 @@ pub static CATALOG: &[ToolDef] = &[
     tool("run_shell", System, "run a shell command and capture its output", true),
     tool("wait", System, "pause, to let the ui settle", false),
     tool("notify", System, "post a notification", false),
+    tool(
+        "list_keybinds",
+        System,
+        "the keyboard shortcuts the user has bound",
+        false,
+    ),
 ];
 
 pub fn find(name: &str) -> Option<&'static ToolDef> {
@@ -112,6 +118,7 @@ pub fn action_label(name: &str) -> &'static str {
         "run_shell" => "running a command",
         "wait" => "waiting",
         "notify" => "sending a notification",
+        "list_keybinds" => "reading your shortcuts",
         _ => "working",
     }
 }
@@ -135,6 +142,7 @@ pub fn approval_summary(name: &str) -> String {
         "clipboard_write" => "overwrite your clipboard",
         "run_shell" => "run a shell command",
         "notify" => "send a notification",
+        "list_keybinds" => "read your keyboard shortcuts",
         _ => name,
     };
     format!("wants to {verb}")

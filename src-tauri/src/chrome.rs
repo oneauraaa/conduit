@@ -8,7 +8,7 @@ use parking_lot::RwLock;
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, Wry};
 
 use crate::platform::screen;
-use crate::platform::types::Display;
+use crate::platform::types::{Display, OwnWindows};
 
 /// Size of the pill window. Tall and wide enough to hold the mode dropdown and
 /// the approval card without clipping, since the window can't grow at runtime
@@ -82,8 +82,18 @@ pub fn create_chrome(app: &AppHandle<Wry>) -> tauri::Result<()> {
         // Belt and braces: Tauri's flag plus the native one. There are open
         // reports of full-screen transparent windows still swallowing events on
         // Tahoe with only the former set.
+        //
+        // Not on Linux, and not yet: tao implements this by combining an empty
+        // input region onto the window's `GdkWindow`, which does not exist
+        // until the widget is realized — and conduit builds all its chrome
+        // hidden. It unwraps that `Option`, so calling this on an unshown
+        // window aborts the process from inside the GTK main loop, where the
+        // panic cannot even unwind into something legible. It is applied in
+        // `show_control_chrome` instead, right after the window is shown.
+        #[cfg(not(target_os = "linux"))]
         let _ = window.set_ignore_cursor_events(true);
-        configure_overlay_native(&window);
+
+        configure_overlay_native(&window, display.index);
         // Bound to locals first: `display` is also a tracing field helper, so
         // `display.width` inside the macro resolves to the wrong thing.
         let (w, h) = (display.width, display.height);
@@ -114,7 +124,7 @@ pub fn create_chrome(app: &AppHandle<Wry>) -> tauri::Result<()> {
 }
 
 /// Raises the overlay above everything and makes it inert.
-fn configure_overlay_native(window: &tauri::WebviewWindow<Wry>) {
+fn configure_overlay_native(window: &tauri::WebviewWindow<Wry>, display_index: usize) {
     #[cfg(target_os = "macos")]
     unsafe {
         use objc2::msg_send;
@@ -138,6 +148,12 @@ fn configure_overlay_native(window: &tauri::WebviewWindow<Wry>) {
 
     #[cfg(target_os = "windows")]
     win_chrome::configure(window, win_chrome::Role::Overlay);
+
+    #[cfg(target_os = "linux")]
+    linux_chrome::configure(window, linux_chrome::Role::Overlay, Some(display_index));
+
+    #[cfg(not(target_os = "linux"))]
+    let _ = display_index;
 }
 
 /// The pill floats high but stays interactive.
@@ -162,10 +178,24 @@ fn configure_pill_native(window: &tauri::WebviewWindow<Wry>) {
 
     #[cfg(target_os = "windows")]
     win_chrome::configure(window, win_chrome::Role::Pill);
+
+    #[cfg(target_os = "linux")]
+    linux_chrome::configure(window, linux_chrome::Role::Pill, None);
 }
 
 /// Parks the pill just above whatever the Dock (or taskbar) leaves free.
+///
+/// On Wayland this is deliberately skipped: a client cannot position its own
+/// window there, and the pill is a layer-shell surface whose placement comes
+/// from its anchor and exclusive zone instead — which is strictly better, since
+/// the compositor knows where the panel actually is and `pill_anchor` can only
+/// guess. See `platform/linux/chrome`-side notes in `configure_pill_native`.
 fn position_pill(window: &tauri::WebviewWindow<Wry>) {
+    #[cfg(target_os = "linux")]
+    if linux_chrome::active() {
+        return;
+    }
+
     let (x, y) = screen::pill_anchor(PILL_W, PILL_H);
     let _ = window.set_position(screen::tauri_position(x, y));
 }
@@ -234,8 +264,12 @@ pub fn show_control_chrome(app: &AppHandle<Wry>, state: crate::state::ControlSta
 
         for display in cached_displays() {
             if let Some(w) = app.get_webview_window(&overlay_label(display.index)) {
-                let _ = w.set_ignore_cursor_events(true);
                 let _ = w.show();
+                // After `show`, never before: on Linux the window has no
+                // `GdkWindow` to attach an empty input region to until it is
+                // realized, and tao unwraps that. Harmless ordering on the
+                // other two, where `create_chrome` already made it inert.
+                let _ = w.set_ignore_cursor_events(true);
             }
         }
         // The pill is shown *after* the overlays on purpose. macOS keeps them
@@ -293,6 +327,31 @@ pub fn hide_control_chrome(app: &AppHandle<Wry>) {
 /// and since this is what stops an agent clicking conduit's own Tools tab, a
 /// mis-sized box is a hole rather than a cosmetic bug.
 pub fn point_hits_conduit(app: &AppHandle<Wry>, x: f64, y: f64) -> bool {
+    match crate::platform::apps::own_windows() {
+        OwnWindows::Rects(rects) => rects
+            .iter()
+            .any(|(rx, ry, rw, rh)| x >= *rx && x < rx + rw && y >= *ry && y < ry + rh),
+        OwnWindows::AskTauri => tauri_rects(app)
+            .iter()
+            .any(|(rx, ry, rw, rh)| x >= *rx && x < rx + rw && y >= *ry && y < ry + rh),
+        // Nothing can say where conduit is, so there is no rectangle to refuse.
+        // Guarding a guessed one is not a weaker version of this protection, it
+        // is a different bug: it refuses clicks the agent is entitled to make
+        // while still leaving the real window exposed.
+        OwnWindows::Unknown => {
+            warn_unguarded();
+            false
+        }
+    }
+}
+
+/// Conduit's own window rectangles as Tauri reports them.
+///
+/// Correct on macOS and Windows, where a process may ask the window server
+/// where its own windows are. `platform::apps::own_windows` decides whether
+/// this is trustworthy, so nothing here has to know which platform it is on.
+fn tauri_rects(app: &AppHandle<Wry>) -> Vec<(f64, f64, f64, f64)> {
+    let mut out = Vec::new();
     for label in ["main", "pill"] {
         let Some(window) = app.get_webview_window(label) else {
             continue;
@@ -310,16 +369,27 @@ pub fn point_hits_conduit(app: &AppHandle<Wry>, x: f64, y: f64) -> bool {
             continue;
         };
 
-        let left = screen::physical_to_space(pos.x as f64, scale);
-        let top = screen::physical_to_space(pos.y as f64, scale);
-        let right = left + screen::physical_to_space(size.width as f64, scale);
-        let bottom = top + screen::physical_to_space(size.height as f64, scale);
-
-        if x >= left && x < right && y >= top && y < bottom {
-            return true;
-        }
+        out.push((
+            screen::physical_to_space(pos.x as f64, scale),
+            screen::physical_to_space(pos.y as f64, scale),
+            screen::physical_to_space(size.width as f64, scale),
+            screen::physical_to_space(size.height as f64, scale),
+        ));
     }
-    false
+    out
+}
+
+/// Says once, loudly, that conduit's own controls are reachable by an agent.
+///
+/// Once rather than per call: this is consulted on every click, and a warning
+/// per click would bury the log it is trying to be found in.
+fn warn_unguarded() {
+    static SAID: std::sync::Once = std::sync::Once::new();
+    SAID.call_once(|| {
+        tracing::warn!(
+            "this compositor will not say where conduit's own windows are, so an agent's              clicks cannot be kept off conduit's controls by coordinate. kwin (plasma) and              hyprland both answer; on anything else, quit conduit from the tray rather than              leaving its window open while an agent drives."
+        );
+    });
 }
 
 /// Brings the main window back from the tray.
@@ -334,5 +404,262 @@ pub fn show_main(app: &AppHandle<Wry>) {
 pub fn hide_main(app: &AppHandle<Wry>) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.hide();
+    }
+}
+
+/// The Wayland counterpart of the `NSWindow` and `HWND` blocks above.
+///
+/// ## Why layer-shell
+///
+/// Neither of the two things conduit's chrome needs is possible for an ordinary
+/// Wayland client. A client cannot place its own window at a screen coordinate,
+/// and it cannot ask to be above other applications — `xdg_toplevel` has no
+/// concept of either, deliberately, because a window that could do both is a
+/// phishing surface.
+///
+/// `zwlr_layer_shell_v1` is the protocol for surfaces that legitimately live
+/// outside that model: panels, notification daemons, lock screens, and this.
+/// It replaces position with *anchors* and z-order with a small set of named
+/// layers, which is a better fit anyway — the overlay wants "cover this whole
+/// output" rather than a rectangle, and the pill wants "just above the panel"
+/// rather than a y coordinate the compositor would have to be asked for.
+///
+/// ## Why it is loaded by hand
+///
+/// `dlopen` rather than linking. conduit ships as a zip with no installer and
+/// no dependency resolution, so a hard link against `libgtk-layer-shell.so`
+/// would turn a missing optional library into a binary that does not start at
+/// all. Loaded this way, a machine without it gets a working MCP server and no
+/// glow, which is the right way round.
+#[cfg(target_os = "linux")]
+mod linux_chrome {
+    use std::ffi::{CString, c_char, c_int, c_void};
+    use std::sync::OnceLock;
+
+    use gtk::glib::translate::ToGlibPtr;
+    use gtk::prelude::*;
+    use tauri::{WebviewWindow, Wry};
+
+    /// `GTK_LAYER_SHELL_LAYER_OVERLAY` — above panels and full-screen windows.
+    const LAYER_OVERLAY: c_int = 3;
+
+    /// `GtkLayerShellEdge`.
+    const EDGE_LEFT: c_int = 0;
+    const EDGE_RIGHT: c_int = 1;
+    const EDGE_TOP: c_int = 2;
+    const EDGE_BOTTOM: c_int = 3;
+
+    /// `GtkLayerShellKeyboardMode`.
+    const KEYBOARD_NONE: c_int = 0;
+    const KEYBOARD_ON_DEMAND: c_int = 2;
+
+    #[derive(Clone, Copy)]
+    pub enum Role {
+        Overlay,
+        Pill,
+    }
+
+    // Named rather than written inline at each `transmute`, so the signature a
+    // symbol is being cast to is stated once and is checkable against
+    // gtk-layer-shell's header. An unannotated `transmute` in FFI infers
+    // whatever the destination field happens to be, which is exactly how a
+    // wrong signature gets in.
+    type Window1 = unsafe extern "C" fn(*mut c_void);
+    type WindowInt = unsafe extern "C" fn(*mut c_void, c_int);
+    type WindowIntInt = unsafe extern "C" fn(*mut c_void, c_int, c_int);
+    type WindowPtr = unsafe extern "C" fn(*mut c_void, *mut c_void);
+    type WindowStr = unsafe extern "C" fn(*mut c_void, *const c_char);
+
+    struct Api {
+        init_for_window: Window1,
+        set_layer: WindowInt,
+        set_anchor: WindowIntInt,
+        set_exclusive_zone: WindowInt,
+        set_keyboard_mode: WindowInt,
+        set_margin: WindowIntInt,
+        set_monitor: WindowPtr,
+        set_namespace: WindowStr,
+    }
+
+    // SAFETY: these are plain function pointers into a library that stays
+    // loaded for the life of the process. They are only ever called on the main
+    // thread, where GTK requires them to be.
+    unsafe impl Send for Api {}
+    unsafe impl Sync for Api {}
+
+    static API: OnceLock<Option<Api>> = OnceLock::new();
+
+    fn api() -> Option<&'static Api> {
+        API.get_or_init(load).as_ref()
+    }
+
+    /// Whether layer-shell is usable, so the rest of `chrome.rs` knows whether
+    /// its own positioning still applies.
+    pub fn active() -> bool {
+        api().is_some()
+    }
+
+    fn load() -> Option<Api> {
+        // An escape hatch for a compositor whose layer-shell implementation
+        // misbehaves. conduit still runs without it — the glow and the pill
+        // just land wherever the compositor decides — so this is a far better
+        // answer for a user than "it crashes on my machine".
+        if std::env::var_os("CONDUIT_NO_LAYER_SHELL").is_some() {
+            tracing::info!("layer-shell disabled by CONDUIT_NO_LAYER_SHELL");
+            return None;
+        }
+
+        // Wayland only. Under X11 the library loads but its calls abort the
+        // process on the first surface, and X11 does not need it — plain
+        // override-redirect positioning works there.
+        if !crate::platform::permissions::wayland() {
+            return None;
+        }
+
+        // The versioned soname first: it is what a distribution package
+        // installs, while the bare `.so` symlink comes from the -dev package
+        // and is often absent on a user's machine.
+        let handle = ["libgtk-layer-shell.so.0", "libgtk-layer-shell.so"]
+            .iter()
+            .find_map(|name| {
+                let c = CString::new(*name).ok()?;
+                // SAFETY: a valid NUL-terminated path and a documented flag.
+                let h = unsafe { libc::dlopen(c.as_ptr(), libc::RTLD_LAZY) };
+                (!h.is_null()).then_some(h)
+            });
+
+        let Some(handle) = handle else {
+            tracing::warn!(
+                "libgtk-layer-shell is not installed, so the overlay and pill \
+                 cannot be placed over other windows. install gtk-layer-shell \
+                 to get them back; everything else works without it."
+            );
+            return None;
+        };
+
+        // SAFETY: each symbol is looked up by its documented name and
+        // transmuted to that function's documented signature. A missing symbol
+        // yields null and aborts the whole load rather than being called.
+        unsafe {
+            let sym = |name: &str| -> Option<*mut c_void> {
+                let c = CString::new(name).ok()?;
+                let p = libc::dlsym(handle, c.as_ptr());
+                (!p.is_null()).then_some(p)
+            };
+
+            Some(Api {
+                init_for_window: std::mem::transmute::<*mut c_void, Window1>(sym(
+                    "gtk_layer_init_for_window",
+                )?),
+                set_layer: std::mem::transmute::<*mut c_void, WindowInt>(sym(
+                    "gtk_layer_set_layer",
+                )?),
+                set_anchor: std::mem::transmute::<*mut c_void, WindowIntInt>(sym(
+                    "gtk_layer_set_anchor",
+                )?),
+                set_exclusive_zone: std::mem::transmute::<*mut c_void, WindowInt>(sym(
+                    "gtk_layer_set_exclusive_zone",
+                )?),
+                set_keyboard_mode: std::mem::transmute::<*mut c_void, WindowInt>(sym(
+                    "gtk_layer_set_keyboard_mode",
+                )?),
+                set_margin: std::mem::transmute::<*mut c_void, WindowIntInt>(sym(
+                    "gtk_layer_set_margin",
+                )?),
+                set_monitor: std::mem::transmute::<*mut c_void, WindowPtr>(sym(
+                    "gtk_layer_set_monitor",
+                )?),
+                set_namespace: std::mem::transmute::<*mut c_void, WindowStr>(sym(
+                    "gtk_layer_set_namespace",
+                )?),
+            })
+        }
+    }
+
+    pub fn configure(window: &WebviewWindow<Wry>, role: Role, display_index: Option<usize>) {
+        let Some(api) = api() else { return };
+        let Ok(gtk_window) = window.gtk_window() else {
+            tracing::warn!("no gtk window behind {}", window.label());
+            return;
+        };
+
+        let raw: *mut c_void = {
+            let as_window: &gtk::Window = gtk_window.upcast_ref();
+            let ptr: *mut gtk::ffi::GtkWindow = as_window.to_glib_none().0;
+            ptr.cast()
+        };
+
+        // SAFETY: `raw` is a live GtkWindow for as long as the Tauri window is,
+        // and every call below is the documented use of that pointer. GTK
+        // requires the main thread, which is where `create_chrome` runs.
+        unsafe {
+            // Must come before anything else, and before the window is first
+            // mapped — which is why every conduit window is built with
+            // `.visible(false)` and shown later.
+            (api.init_for_window)(raw);
+
+            // The namespace is what a compositor matches window rules against,
+            // so a user who wants to special-case conduit's glow has a handle.
+            if let Ok(ns) = CString::new("conduit") {
+                (api.set_namespace)(raw, ns.as_ptr());
+            }
+
+            (api.set_layer)(raw, LAYER_OVERLAY);
+
+            match role {
+                Role::Overlay => {
+                    // Anchored to all four edges, which is how layer-shell
+                    // spells "fill this output" — there is no set_size for a
+                    // layer surface, and the compositor resizes it on hotplug.
+                    for edge in [EDGE_LEFT, EDGE_RIGHT, EDGE_TOP, EDGE_BOTTOM] {
+                        (api.set_anchor)(raw, edge, 1);
+                    }
+                    // -1 means "ignore other surfaces' exclusive zones", so the
+                    // glow reaches under the panel instead of stopping at it.
+                    (api.set_exclusive_zone)(raw, -1);
+                    // The overlay must never take a keystroke from the app
+                    // being driven.
+                    (api.set_keyboard_mode)(raw, KEYBOARD_NONE);
+
+                    if let Some(monitor) = display_index.and_then(gdk_monitor) {
+                        (api.set_monitor)(raw, monitor);
+                    }
+                }
+                Role::Pill => {
+                    // Bottom edge only. Leaving left and right unanchored is
+                    // what centres it horizontally.
+                    (api.set_anchor)(raw, EDGE_BOTTOM, 1);
+                    // 0, not -1: the pill should sit *above* the panel, and
+                    // respecting the panel's exclusive zone is what puts it
+                    // there without conduit having to know the panel's height.
+                    (api.set_exclusive_zone)(raw, 0);
+                    (api.set_margin)(raw, EDGE_BOTTOM, 8);
+                    // On demand, not none: the stop button has to be clickable,
+                    // but the pill must not steal focus by appearing.
+                    (api.set_keyboard_mode)(raw, KEYBOARD_ON_DEMAND);
+                }
+            }
+        }
+    }
+
+    /// The `GdkMonitor` for a display index, matching `screen::displays` order.
+    fn gdk_monitor(index: usize) -> Option<*mut c_void> {
+        let display = gtk::gdk::Display::default()?;
+
+        // `screen::displays` sorts top-to-bottom, left-to-right; GDK's own
+        // index order is arbitrary. Sorting the same way here is what keeps
+        // overlay N on the monitor conduit calls display N.
+        let mut monitors: Vec<(i32, i32, gtk::gdk::Monitor)> = (0..display.n_monitors())
+            .filter_map(|i| display.monitor(i))
+            .map(|m| {
+                let g = m.geometry();
+                (g.y(), g.x(), m)
+            })
+            .collect();
+        monitors.sort_by_key(|(y, x, _)| (*y, *x));
+
+        let monitor = monitors.into_iter().nth(index)?.2;
+        let ptr: *mut gtk::gdk::ffi::GdkMonitor = monitor.to_glib_none().0;
+        Some(ptr.cast())
     }
 }

@@ -126,10 +126,43 @@ pub fn set_start_hidden(state: State<'_, Shared>, hidden: bool) -> Settings {
 }
 
 /// Points the OS's login entry at the current state of the setting.
+///
+/// ## Why a development build refuses
+///
+/// The login entry is `current_exe()`. In a `cargo run`/`cargo build` binary
+/// that is `target/debug/conduit`, which is a perfectly good executable — and
+/// a completely broken app to start at login, because a development build does
+/// not carry the frontend. It loads it from the Vite dev server, which is not
+/// running at login and will not be. What the user gets is conduit's real
+/// window frame filled with WebKit's *"Could not connect to localhost:
+/// Connection refused"*, with no hint that the cause is which binary got
+/// registered — and because closing hides to the tray, it comes back.
+///
+/// `is_dev()` is exactly the right question to ask: it is
+/// `!cfg!(feature = "custom-protocol")`, the same condition
+/// `generate_context!` uses to decide between the embedded frontend and the dev
+/// URL. True here means, precisely, "these webviews need a dev server".
+///
+/// Any entry an earlier development run already wrote is removed on the way
+/// out. It can only point at a dev binary, so it can only produce that dead
+/// window; leaving it in place to be polite would be leaving the bug. The
+/// *setting* is untouched — a release build re-asserts it at startup and
+/// registers the real binary.
 pub fn apply_autostart(app: &AppHandle<Wry>, enabled: bool) -> Result<(), String> {
     use tauri_plugin_autostart::ManagerExt;
 
     let manager = app.autolaunch();
+
+    if enabled && tauri::is_dev() {
+        let _ = manager.disable();
+        return Err(
+            "this is a development build, so it can't start at login — the entry would point at \
+             target/debug/conduit, whose window is served by the dev server and would come up \
+             empty. build a release binary (pnpm run package) and turn this on there."
+                .into(),
+        );
+    }
+
     let result = if enabled {
         manager.enable()
     } else {
@@ -187,7 +220,17 @@ pub fn open_permission_settings(app: AppHandle<Wry>, which: String) {
         let _ = tauri_plugin_opener::open_url(url, None::<&str>);
     }
 
-    #[cfg(not(target_os = "macos"))]
+    // On Linux there is no settings pane to open: the one grant conduit needs
+    // is the portal's, and the only way to ask again is to ask again. `which`
+    // is ignored because input and capture come from the same session — see
+    // `platform/linux/permissions.rs`.
+    #[cfg(target_os = "linux")]
+    {
+        let _ = which;
+        permissions::prompt_screen_recording();
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     let _ = which;
 
     let _ = app.emit("readiness:changed", permissions::snapshot());
@@ -346,6 +389,19 @@ pub async fn regenerate_remote_token(
     let next = crate::tailscale::state(port, &settings.remote_token);
     let _ = app.emit("tailscale:state", &next);
     Ok(next)
+}
+
+/* ── hyprland ── */
+
+/// The user's own keyboard shortcuts, when this is a Hyprland session.
+///
+/// Off Hyprland this reports `available: false` rather than failing, so the
+/// tab has something to render on every platform. The work is a `hyprctl` call
+/// plus one config read, cheap enough to do per invocation — like
+/// `get_readiness`, there is no cached copy to go stale.
+#[tauri::command]
+pub fn get_hyprland_state() -> crate::hyprland::HyprlandState {
+    crate::hyprland::snapshot()
 }
 
 /* ── window chrome ── */

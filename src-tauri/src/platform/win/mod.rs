@@ -21,6 +21,7 @@ pub mod clipboard;
 pub mod com;
 pub mod cursor;
 pub mod d3d;
+pub mod host;
 pub mod input;
 pub mod keycodes;
 pub mod panic_stop;

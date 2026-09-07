@@ -6,6 +6,7 @@ import type {
   AgentTarget,
   ControlState,
   CursorEvent,
+  HyprlandState,
   PendingApproval,
   Readiness,
   PulseEvent,
@@ -60,6 +61,7 @@ const local: Record<string, (args: Record<string, unknown>) => unknown> = {
   resume_control: () => ({ ...standalone.control, stopped: false }),
   list_agents: () => standalone.agents,
   get_tailscale_state: () => standalone.tailscale,
+  get_hyprland_state: () => standalone.hyprland,
   enable_remote: () => ({ ...standalone.tailscale, sharing: true }),
   disable_remote: () => ({ ...standalone.tailscale, sharing: false, publicUrl: null }),
   regenerate_remote_token: () => standalone.tailscale,
@@ -149,6 +151,12 @@ export const getTailscaleState = () => invoke<TailscaleState>("get_tailscale_sta
 export const enableRemote = () => invoke<TailscaleState>("enable_remote");
 export const disableRemote = () => invoke<TailscaleState>("disable_remote");
 export const regenerateRemoteToken = () => invoke<TailscaleState>("regenerate_remote_token");
+
+/* ── hyprland ───────────────────────────────────────────────── */
+
+/** Reports `available: false` off Hyprland rather than failing, so the tab has
+ *  something to render on every platform. */
+export const getHyprlandState = () => invoke<HyprlandState>("get_hyprland_state");
 
 /* ── window chrome ──────────────────────────────────────────── */
 

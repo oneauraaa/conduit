@@ -26,6 +26,11 @@ const CLI_CANDIDATES: &[&str] = &[
     "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
 ];
 
+/// Every Linux distribution's package puts it on PATH; the static tarball is
+/// the one that does not, and it conventionally lands in `/usr/local/bin`.
+#[cfg(target_os = "linux")]
+const CLI_CANDIDATES: &[&str] = &["/usr/bin/tailscale", "/usr/local/bin/tailscale"];
+
 /// The Windows installer is the only distribution, and it always lands here.
 #[cfg(target_os = "windows")]
 const CLI_CANDIDATES: &[&str] = &[
@@ -71,7 +76,7 @@ pub fn cli() -> Option<PathBuf> {
         }
     }
     // Fall back to PATH, for unusual installs.
-    #[cfg(target_os = "macos")]
+    #[cfg(not(target_os = "windows"))]
     let mut lookup = Command::new("/usr/bin/which");
     #[cfg(target_os = "windows")]
     let mut lookup = {
@@ -204,7 +209,9 @@ pub fn generate_token() -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-#[cfg(target_os = "macos")]
+/// `/dev/urandom` is the kernel CSPRNG on both macOS and Linux, so one
+/// implementation covers them; Windows has its own below.
+#[cfg(not(target_os = "windows"))]
 fn random_bytes() -> [u8; 16] {
     use std::io::Read;
 

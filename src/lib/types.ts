@@ -63,6 +63,56 @@ export interface TailscaleState {
 }
 
 /**
+ * One of the user's own keyboard shortcuts.
+ *
+ * Read from two places and merged — see `src-tauri/src/hyprland.rs`. The
+ * compositor decides what exists (`active`, `flags`, `submap`); the config file
+ * supplies everything a human wrote (`description`, `section`, `modAlias`,
+ * `sourceFile`).
+ */
+export interface Keybind {
+  id: string;
+  /** Resolved modifier names, in the order people say them. */
+  mods: string[];
+  /** The variable the config used for them, e.g. `$mainMod`. */
+  modAlias: string | null;
+  /** `Q`, `left`, `mouse:272`, `code:28`, `XF86AudioMute`. */
+  key: string;
+  dispatcher: string;
+  args: string;
+  /** A `bindd` description, or the trailing `#` comment on the line. */
+  description: string | null;
+  flags: string[];
+  submap: string | null;
+  /** The comment heading above it, used to group the list. */
+  section: string | null;
+  sourceFile: string | null;
+  sourceLine: number | null;
+  /** The compositor has this bind loaded. False means the config declares it
+   *  but Hyprland does not have it — a rejected line, or an unsaved edit. */
+  active: boolean;
+  /** The other binds on this same chord. Hyprland runs every match rather than
+   *  stopping at the first, so these all fire together. */
+  alsoFires: string[];
+}
+
+export interface HyprlandState {
+  /** This session is Hyprland. Everything else is meaningless when false. */
+  available: boolean;
+  version: string | null;
+  /** The file the binds were read from. */
+  configPath: string | null;
+  configKind: "conf" | "lua" | null;
+  /** The file Hyprland itself loaded, which is not always the one above. */
+  activeConfigPath: string | null;
+  /** Set when those two disagree: conduit prefers .conf, Hyprland prefers .lua. */
+  mismatch: string | null;
+  binds: Keybind[];
+  /** One source failed. Never fatal alone — the other still fills the list. */
+  error: string | null;
+}
+
+/**
  * What the machine needs from the user before conduit can do its job.
  *
  * A tagged union rather than one struct with optional fields, because the two
@@ -94,6 +144,40 @@ export type Readiness =
       /** The capture session can suppress the yellow recording border
        *  (Windows 11 22000+). */
       borderlessCapture: boolean;
+    }
+  | {
+      platform: "linux";
+      /** `XDG_CURRENT_DESKTOP`, so the card can name what it found. */
+      desktop: string;
+      wayland: boolean;
+      /** The screen-sharing session is live. This is about *capture*: input
+       *  used to ride on the same portal session and no longer does, so a
+       *  machine can see nothing and still drive the pointer perfectly.
+       *  Wayland refuses to make this grant permanent, so it is asked every
+       *  launch. */
+      portalReady: boolean;
+      /** Why it is not, when it is not. `null` while the prompt is unanswered. */
+      portalError: string | null;
+      /** Which of Wayland's two input routes this machine uses: "wlroots" for
+       *  the virtual-pointer/virtual-keyboard protocols (hyprland, sway),
+       *  "portal" for RemoteDesktop (gnome, kde). */
+      inputRoute: "wlroots" | "portal";
+      /** Input is usable: the pointer moves and keys land. */
+      inputReady: boolean;
+      /** Why it is not, when it is not. */
+      inputError: string | null;
+      /** Frames are actually arriving. A session can be live while capture is
+       *  not, if the compositor negotiated a buffer type conduit cannot map. */
+      captureReady: boolean;
+      /** KWin is present, so windows can be listed, moved and focused. No
+       *  Wayland protocol exposes this, so it is Plasma-only. */
+      windowManagement: boolean;
+      /** Some application is publishing an AT-SPI tree. Off by default. */
+      accessibilityTree: boolean;
+      accessibilityHint: string;
+      /** The keyboard is readable, so hold-Escape works. */
+      panicStop: boolean;
+      panicStopHint: string;
     };
 
 /** One row in the Server tab's live log. */
