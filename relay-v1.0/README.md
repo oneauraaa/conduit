@@ -29,7 +29,9 @@ $PY relay-v1.0/train_relay.py export
 $PY relay-v1.0/train_relay.py evaluate
 ```
 
-`prepare` is CPU-only and validates the schema and JSONL. `smoke` loads the model and performs a very short bounded training path. Run it before a long training job. `train` writes the LoRA adapter to `relay-v1.0/output/adapter`. `export` creates the merged checkpoint and `relay-v1.0/output/Ornith-1.5-9B-Relay-v1.0-Q4_K_M.gguf`. `evaluate` writes `relay-v1.0/output/evaluation.json`.
+`prepare` is CPU-only and validates the schema and JSONL. It writes a deterministic corpus built from curated scenarios, keeping host and policy families together while preserving tool and approval coverage in both splits. `smoke` loads the model and performs a very short bounded training path. Run it before a long training job. `train` writes the LoRA adapter to `relay-v1.0/output/adapter`. `export` creates the merged checkpoint and `relay-v1.0/output/Ornith-1.5-9B-Relay-v1.0-Q4_K_M.gguf`. `evaluate` writes a structural dataset audit to `relay-v1.0/output/dataset_audit.json`; it does not claim model performance until an adapter or endpoint is actually evaluated.
+
+The corpus is assembled by `relay-v1.0/relay_examples.py` and validated by `relay-v1.0/relay_dataset.py`. Training examples use sequential one-call/one-result turns, exact tool schemas, observed window IDs, approval metadata, and native Ornith tool-call syntax. The trainer uses completion-only targets so user messages and synthetic tool results provide context without becoming text the model is trained to generate.
 
 The initial configuration uses 2,048 tokens, batch size 1, gradient accumulation 8, NF4 4-bit loading, gradient checkpointing, and a paged 8-bit optimizer. If the smoke run reports an out-of-memory error, rerun with `--max-seq-length 1024` before changing the model or quantization target.
 
