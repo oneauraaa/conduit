@@ -424,8 +424,15 @@ fn icon_for(s: &Spec) -> Option<String> {
 
 /* ── format-specific edits ──────────────────────────────────── */
 
-fn conduit_json_entry(url: &str) -> serde_json::Value {
-    serde_json::json!({ "type": "http", "url": url })
+fn conduit_json_entry(url: &str, opencode: bool) -> serde_json::Value {
+    if opencode {
+        // OpenCode's current schema calls an HTTP MCP server "remote" and
+        // requires the startup switch to be explicit. Its older "http"
+        // spelling is rejected before the server can even be listed.
+        serde_json::json!({ "type": "remote", "url": url, "enabled": true })
+    } else {
+        serde_json::json!({ "type": "http", "url": url })
+    }
 }
 
 /// `mcp_key` picks the container: `mcpServers` for most agents, `mcp` for
@@ -447,7 +454,7 @@ fn edit_json(existing: &str, url: &str, mcp_servers_key: bool) -> Result<String,
     servers
         .as_object_mut()
         .expect("checked above")
-        .insert(ENTRY.to_string(), conduit_json_entry(url));
+        .insert(ENTRY.to_string(), conduit_json_entry(url, !mcp_servers_key));
 
     serde_json::to_string_pretty(&root).map_err(|e| format!("could not serialize: {e}"))
 }
@@ -687,6 +694,8 @@ trust_level = "trusted"
 
         assert_eq!(v["theme"], "dark");
         assert_eq!(v["mcp"]["conduit"]["url"], URL);
+        assert_eq!(v["mcp"]["conduit"]["type"], "remote");
+        assert_eq!(v["mcp"]["conduit"]["enabled"], true);
         assert!(v.get("mcpServers").is_none());
     }
 
