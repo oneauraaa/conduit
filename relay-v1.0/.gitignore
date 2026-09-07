@@ -1,0 +1,10 @@
+# Large/local model artifacts
+*.gguf
+*.safetensors
+*.bin
+output/
+cache/
+models/
+checkpoints/
+__pycache__/
+*.pyc

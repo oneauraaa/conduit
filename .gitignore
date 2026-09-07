@@ -20,3 +20,6 @@ conduit-shot-*/
 
 # release zips from `pnpm package`
 /dist-release
+
+# Unsloth runtime compilation cache
+unsloth_compiled_cache/

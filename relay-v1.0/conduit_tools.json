@@ -1,0 +1,178 @@
+[
+  {
+    "name": "screenshot",
+    "group": "vision",
+    "risky": false,
+    "description": "Capture the screen as a PNG. Prefer read_screen_text when you only need text or control positions; use this for layout, images, or visual confirmation.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "display": {"type": "integer", "description": "Display index; defaults to the primary display."},
+        "region": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4, "description": "Optional [x, y, width, height] crop in display coordinates."},
+        "scale": {"type": "number", "minimum": 0.1, "maximum": 1.0, "description": "Optional capture scale from 0.1 to 1.0."}
+      },
+      "required": []
+    }
+  },
+  {
+    "name": "list_displays",
+    "group": "vision",
+    "risky": false,
+    "description": "List attached displays with bounds in the shared top-left coordinate space.",
+    "parameters": {"type": "object", "properties": {}, "required": []}
+  },
+  {
+    "name": "move_cursor",
+    "group": "input",
+    "risky": false,
+    "description": "Move the cursor to a point with a natural glide.",
+    "parameters": {"type": "object", "properties": {"x": {"type": "number"}, "y": {"type": "number"}}, "required": ["x", "y"]}
+  },
+  {
+    "name": "click",
+    "group": "input",
+    "risky": false,
+    "description": "Click at an optional point; count 2 gives a real double-click.",
+    "parameters": {"type": "object", "properties": {"x": {"type": "number"}, "y": {"type": "number"}, "button": {"type": "string", "enum": ["left", "right", "middle"]}, "count": {"type": "integer", "minimum": 1, "maximum": 3}}, "required": []}
+  },
+  {
+    "name": "drag",
+    "group": "input",
+    "risky": false,
+    "description": "Press, move, and release for sliders, resize handles, and drag-and-drop.",
+    "parameters": {"type": "object", "properties": {"from_x": {"type": "number"}, "from_y": {"type": "number"}, "to_x": {"type": "number"}, "to_y": {"type": "number"}, "button": {"type": "string", "enum": ["left", "right", "middle"]}}, "required": ["to_x", "to_y"]}
+  },
+  {
+    "name": "scroll",
+    "group": "input",
+    "risky": false,
+    "description": "Scroll the surface under the cursor; positive dy scrolls up.",
+    "parameters": {"type": "object", "properties": {"dx": {"type": "integer"}, "dy": {"type": "integer"}, "x": {"type": "number"}, "y": {"type": "number"}}, "required": []}
+  },
+  {
+    "name": "type_text",
+    "group": "input",
+    "risky": false,
+    "description": "Type literal, layout-independent text into the focused control.",
+    "parameters": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}
+  },
+  {
+    "name": "key_press",
+    "group": "input",
+    "risky": false,
+    "description": "Press a key with optional modifiers such as cmd, ctrl, shift, alt, win, or fn.",
+    "parameters": {"type": "object", "properties": {"key": {"type": "string"}, "modifiers": {"type": "array", "items": {"type": "string"}}}, "required": ["key"]}
+  },
+  {
+    "name": "get_cursor_position",
+    "group": "input",
+    "risky": false,
+    "description": "Read the current cursor position.",
+    "parameters": {"type": "object", "properties": {}, "required": []}
+  },
+  {
+    "name": "list_windows",
+    "group": "windows",
+    "risky": false,
+    "description": "List on-screen windows with titles, owning apps, bounds, and frontmost order.",
+    "parameters": {"type": "object", "properties": {}, "required": []}
+  },
+  {
+    "name": "focus_window",
+    "group": "windows",
+    "risky": false,
+    "description": "Bring a window to the front by its window_id from list_windows.",
+    "parameters": {"type": "object", "properties": {"window_id": {"type": "integer"}}, "required": ["window_id"]}
+  },
+  {
+    "name": "set_window_bounds",
+    "group": "windows",
+    "risky": false,
+    "description": "Move and resize a window.",
+    "parameters": {"type": "object", "properties": {"window_id": {"type": "integer"}, "x": {"type": "number"}, "y": {"type": "number"}, "width": {"type": "number"}, "height": {"type": "number"}}, "required": ["window_id", "x", "y", "width", "height"]}
+  },
+  {
+    "name": "list_apps",
+    "group": "windows",
+    "risky": false,
+    "description": "List running applications.",
+    "parameters": {"type": "object", "properties": {}, "required": []}
+  },
+  {
+    "name": "open_app",
+    "group": "windows",
+    "risky": false,
+    "description": "Launch an application or bring it forward if already running.",
+    "parameters": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}
+  },
+  {
+    "name": "quit_app",
+    "group": "windows",
+    "risky": true,
+    "description": "Ask an application to quit; it may prompt about unsaved work.",
+    "parameters": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}
+  },
+  {
+    "name": "read_screen_text",
+    "group": "accessibility",
+    "risky": false,
+    "description": "Read on-screen text and control bounds from the accessibility tree.",
+    "parameters": {"type": "object", "properties": {"app": {"type": "string", "description": "Optional app name; defaults to the frontmost app."}}, "required": []}
+  },
+  {
+    "name": "find_element",
+    "group": "accessibility",
+    "risky": false,
+    "description": "Find a control by text and return a point to click, ranked best match first.",
+    "parameters": {"type": "object", "properties": {"query": {"type": "string"}, "app": {"type": "string"}}, "required": ["query"]}
+  },
+  {
+    "name": "web_search",
+    "group": "system",
+    "risky": false,
+    "description": "Search the web with DuckDuckGo and return result links and snippets.",
+    "parameters": {"type": "object", "properties": {"query": {"type": "string"}, "max_results": {"type": "integer", "minimum": 1, "maximum": 10}}, "required": ["query"]}
+  },
+  {
+    "name": "clipboard_read",
+    "group": "system",
+    "risky": false,
+    "description": "Read the clipboard's text.",
+    "parameters": {"type": "object", "properties": {}, "required": []}
+  },
+  {
+    "name": "clipboard_write",
+    "group": "system",
+    "risky": true,
+    "description": "Replace the clipboard's contents, destroying the text currently copied.",
+    "parameters": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}
+  },
+  {
+    "name": "run_shell",
+    "group": "system",
+    "risky": true,
+    "description": "Run a shell command through the user's login shell and capture its output.",
+    "parameters": {"type": "object", "properties": {"command": {"type": "string"}, "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 300}}, "required": ["command"]}
+  },
+  {
+    "name": "wait",
+    "group": "system",
+    "risky": false,
+    "description": "Pause to let an animation finish or a window appear.",
+    "parameters": {"type": "object", "properties": {"milliseconds": {"type": "integer", "minimum": 1, "maximum": 30000}}, "required": ["milliseconds"]}
+  },
+  {
+    "name": "notify",
+    "group": "system",
+    "risky": false,
+    "description": "Post a desktop notification.",
+    "parameters": {"type": "object", "properties": {"title": {"type": "string"}, "body": {"type": "string"}}, "required": ["title", "body"]}
+  },
+  {
+    "name": "list_keybinds",
+    "group": "system",
+    "risky": false,
+    "description": "List the user's keyboard shortcuts when the desktop publishes them.",
+    "parameters": {"type": "object", "properties": {}, "required": []}
+  }
+]

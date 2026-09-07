@@ -1,0 +1,33 @@
+{
+  "total_records": 87,
+  "train_records": 57,
+  "eval_records": 30,
+  "tools": [
+    "click",
+    "clipboard_read",
+    "clipboard_write",
+    "drag",
+    "find_element",
+    "focus_window",
+    "get_cursor_position",
+    "key_press",
+    "list_apps",
+    "list_displays",
+    "list_keybinds",
+    "list_windows",
+    "move_cursor",
+    "notify",
+    "open_app",
+    "quit_app",
+    "read_screen_text",
+    "run_shell",
+    "screenshot",
+    "scroll",
+    "set_window_bounds",
+    "type_text",
+    "wait",
+    "web_search"
+  ],
+  "seed": 3407,
+  "eval_fraction": 0.1
+}
