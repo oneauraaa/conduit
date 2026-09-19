@@ -46,6 +46,9 @@ const MANIFEST: &str = r#"<?xml version="1.0" encoding="utf-8"?>
 </assembly>
 "#;
 
+#[cfg(target_os = "windows")]
+const COMMON_CONTROLS_V6: &str = "/MANIFESTDEPENDENCY:\"type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"";
+
 fn main() {
     // The screencapturekit crate bridges through Swift, so the binary links
     // against the Swift runtime (libswift_Concurrency and friends) via
@@ -65,6 +68,11 @@ fn main() {
 
     #[cfg(target_os = "windows")]
     {
+        // tauri-build embeds MANIFEST in the application executable, but
+        // `cargo test` links a separate harness without that resource. Tauri's
+        // TaskDialogIndirect import requires Common Controls v6, so make the
+        // same activation dependency explicit on every test executable.
+        println!("cargo:rustc-link-arg-tests={COMMON_CONTROLS_V6}");
         let attributes = tauri_build::Attributes::new()
             .windows_attributes(tauri_build::WindowsAttributes::new().app_manifest(MANIFEST));
         tauri_build::try_build(attributes).expect("failed to run tauri-build");
