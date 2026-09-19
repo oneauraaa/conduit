@@ -722,6 +722,7 @@ dependencies = [
  "axum",
  "base64 0.23.1",
  "dirs 6.0.0",
+ "embed-resource",
  "evdev",
  "freedesktop-icons",
  "gtk",
