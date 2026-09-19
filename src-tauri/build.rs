@@ -72,7 +72,7 @@ fn main() {
         // `cargo test` links a separate harness without that resource. Tauri's
         // TaskDialogIndirect import requires Common Controls v6, so make the
         // same activation dependency explicit on every test executable.
-        println!("cargo:rustc-link-arg-tests={COMMON_CONTROLS_V6}");
+        println!("cargo:rustc-link-arg={COMMON_CONTROLS_V6}");
         let attributes = tauri_build::Attributes::new()
             .windows_attributes(tauri_build::WindowsAttributes::new().app_manifest(MANIFEST));
         tauri_build::try_build(attributes).expect("failed to run tauri-build");
