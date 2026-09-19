@@ -208,14 +208,46 @@ jobs:
               Write-Host
           }
 
-          $dumpbin = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC" -Recurse -Filter dumpbin.exe |
+          cargo build --bin conduit
+          if ($LASTEXITCODE -ne 0) {
+            throw "the Windows application binary did not build"
+          }
+          $application = Resolve-Path target/debug/conduit.exe
+          $process = Start-Process $application -PassThru
+          Start-Sleep -Seconds 5
+          if ($process.HasExited) {
+            Write-Host "Application smoke-test exit code: $($process.ExitCode)"
+          } else {
+            Write-Host "Application smoke test: process started successfully"
+            Stop-Process -Id $process.Id -Force
+          }
+
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $visualStudio = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          $dumpbin = Get-ChildItem "$visualStudio\VC\Tools\MSVC" -Recurse -Filter dumpbin.exe -ErrorAction SilentlyContinue |
             Where-Object FullName -Like '*\bin\Hostx64\x64\dumpbin.exe' |
             Sort-Object FullName -Descending |
             Select-Object -First 1
           if ($dumpbin) {
+            Write-Host "--- test executable dependencies and imports ---"
             & $dumpbin.FullName /DEPENDENTS $binary.FullName
             & $dumpbin.FullName /IMPORTS $binary.FullName
+            Write-Host "--- application dependencies and imports ---"
+            & $dumpbin.FullName /DEPENDENTS $application
+            & $dumpbin.FullName /IMPORTS $application
+          } else {
+            Write-Host "dumpbin was not found under $visualStudio"
           }
+
+      - name: Upload Windows loader diagnostics
+        if: failure() && matrix.os == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-loader-diagnostics
+          path: |
+            src-tauri/target/debug/deps/conduit_lib-*.exe
+            src-tauri/target/debug/conduit.exe
+          if-no-files-found: warn
 
       - name: Package
         env:
