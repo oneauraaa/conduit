@@ -1,6 +1,6 @@
 [package]
 name = "conduit"
-version = "0.1.0"
+version = "1.0.0"
 description = "let ai agents use your computer"
 edition = "2024"
 rust-version = "1.85"
@@ -31,7 +31,7 @@ rmcp = { version = "3.1", features = [
 ] }
 schemars = "1"
 axum = "0.8"
-tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "sync", "time", "net", "process"] }
+tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "sync", "time", "net", "process", "io-util"] }
 tokio-util = "0.7"
 
 serde = { version = "1", features = ["derive"] }
@@ -51,8 +51,12 @@ dirs = "6"
 # imaging
 image = { version = "0.25", default-features = false, features = ["png"] }
 base64 = "0.23"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "charset"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "charset", "json"] }
 scraper = "0.22"
+sha2 = "0.10"
+uuid = { version = "1", features = ["v4", "serde"] }
+url = "2"
+zip = { version = "4", default-features = false, features = ["deflate"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
@@ -158,9 +162,9 @@ tauri-plugin-single-instance = "2"
 # which is exactly where every tool call runs.
 zbus = "5"
 
-# Screen capture. The portal hands over a PipeWire remote; frames arrive on
-# their own thread and the newest one is what `capture` crops. See
-# `linux/capture.rs` for why a live stream beats a per-call screenshot here.
+# Screen capture. The portal hands over PipeWire nodes, but Conduit connects to
+# one only while the agent's `screenshot` tool call is in flight. There is no
+# background frame pump; see `linux/capture.rs`.
 pipewire = "0.10"
 
 # Reading the pointer for the panic stop. Wayland has no passive key listener

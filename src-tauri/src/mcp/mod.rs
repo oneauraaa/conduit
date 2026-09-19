@@ -1,3 +1,4 @@
+mod browser_tools;
 pub mod catalog;
 pub mod cors;
 pub mod gate;

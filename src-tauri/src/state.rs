@@ -11,6 +11,7 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
+use crate::browser::BrowserManager;
 use crate::mcp::catalog;
 
 pub const DEFAULT_PORT: u16 = 6767;
@@ -43,6 +44,74 @@ pub enum ToolsAccess {
     Custom,
     /// Nothing is available, regardless of the per-tool switches.
     Off,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BrowserPermissionMode {
+    AlwaysAllow,
+    AlwaysAsk,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BrowserPermissionCategory {
+    OpenWebsites,
+    ReadHistory,
+    DownloadFiles,
+    UploadFiles,
+}
+
+impl BrowserPermissionCategory {
+    pub const fn as_key(self) -> &'static str {
+        match self {
+            Self::OpenWebsites => "openWebsites",
+            Self::ReadHistory => "readHistory",
+            Self::DownloadFiles => "downloadFiles",
+            Self::UploadFiles => "uploadFiles",
+        }
+    }
+
+    pub fn from_key(value: &str) -> Option<Self> {
+        match value {
+            "openWebsites" => Some(Self::OpenWebsites),
+            "readHistory" => Some(Self::ReadHistory),
+            "downloadFiles" => Some(Self::DownloadFiles),
+            "uploadFiles" => Some(Self::UploadFiles),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserPermissions {
+    pub open_websites: BrowserPermissionMode,
+    pub read_history: BrowserPermissionMode,
+    pub download_files: BrowserPermissionMode,
+    pub upload_files: BrowserPermissionMode,
+}
+
+impl Default for BrowserPermissions {
+    fn default() -> Self {
+        Self {
+            open_websites: BrowserPermissionMode::AlwaysAllow,
+            read_history: BrowserPermissionMode::AlwaysAllow,
+            download_files: BrowserPermissionMode::AlwaysAsk,
+            upload_files: BrowserPermissionMode::AlwaysAsk,
+        }
+    }
+}
+
+impl BrowserPermissions {
+    pub fn get(&self, category: BrowserPermissionCategory) -> BrowserPermissionMode {
+        match category {
+            BrowserPermissionCategory::OpenWebsites => self.open_websites,
+            BrowserPermissionCategory::ReadHistory => self.read_history,
+            BrowserPermissionCategory::DownloadFiles => self.download_files,
+            BrowserPermissionCategory::UploadFiles => self.upload_files,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,6 +151,10 @@ pub struct Settings {
     /// appears to do nothing is worse than a window you have to dismiss.
     #[serde(default)]
     pub start_hidden: bool,
+    /// Browser-specific policy overrides Manual/Auto/Full for these four data
+    /// boundaries. Hard tool gates and Panic Stop still win.
+    #[serde(default)]
+    pub browser_permissions: BrowserPermissions,
 }
 
 impl Default for Settings {
@@ -101,6 +174,7 @@ impl Default for Settings {
             cors_origins: Vec::new(),
             start_on_login: false,
             start_hidden: false,
+            browser_permissions: BrowserPermissions::default(),
         }
     }
 }
@@ -168,6 +242,7 @@ pub struct PendingApproval {
     pub summary: String,
     pub detail: Option<String>,
     pub agent: Option<String>,
+    pub category: Option<BrowserPermissionCategory>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -190,6 +265,11 @@ pub struct ToolCallEvent {
     pub outcome: &'static str,
     pub detail: Option<String>,
     pub duration_ms: Option<u64>,
+}
+
+struct ApprovalWaiter {
+    browser: bool,
+    sender: oneshot::Sender<Decision>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -261,8 +341,8 @@ pub enum Readiness {
         input_ready: bool,
         /// Why it isn't, when it isn't.
         input_error: Option<String>,
-        /// Frames are actually arriving. A session can be live while capture is
-        /// not, if the compositor negotiated a buffer type conduit cannot map.
+        /// The portal granted screen nodes. Actual frame delivery is verified
+        /// only when the screenshot tool opens its one-shot PipeWire stream.
         capture_ready: bool,
         /// KWin is present, so windows can be listed, moved and focused.
         window_management: bool,
@@ -310,12 +390,16 @@ pub struct AppState {
     /// Tools the user allowed for the remainder of this control session.
     session_allows: RwLock<Vec<String>>,
     /// In-flight approval requests, keyed by id.
-    approvals: RwLock<HashMap<String, oneshot::Sender<Decision>>>,
+    approvals: RwLock<HashMap<String, ApprovalWaiter>>,
     /// Set while a panic-stop is in effect; every tool short-circuits.
     pub aborted: RwLock<bool>,
     /// Unix millis of the last tool call, used to retire an idle session.
     last_activity: AtomicU64,
+    /// Calls and approval prompts currently in flight. The idle watchdog must
+    /// not retire browser ownership while one is still waiting or running.
+    active_calls: AtomicU64,
     seq: AtomicU64,
+    pub browser: Arc<BrowserManager>,
 }
 
 /// How long an agent can go without calling a tool before conduit decides the
@@ -330,6 +414,7 @@ impl AppState {
     pub fn new(app: AppHandle, settings: Settings) -> Self {
         let port = settings.port;
         let mode = settings.default_access;
+        let browser = BrowserManager::new(app.clone());
         Self {
             app,
             settings: RwLock::new(settings),
@@ -352,7 +437,9 @@ impl AppState {
             approvals: RwLock::new(HashMap::new()),
             aborted: RwLock::new(false),
             last_activity: AtomicU64::new(0),
+            active_calls: AtomicU64::new(0),
             seq: AtomicU64::new(0),
+            browser,
         }
     }
 
@@ -363,7 +450,9 @@ impl AppState {
 
     /// True when a session is active but has gone quiet past the timeout.
     pub fn is_idle(&self) -> bool {
-        if self.control.read().phase != ControlPhase::Active {
+        if self.control.read().phase != ControlPhase::Active
+            || self.active_calls.load(Ordering::Acquire) > 0
+        {
             return false;
         }
         let last = self.last_activity.load(Ordering::Relaxed);
@@ -372,6 +461,13 @@ impl AppState {
 
     pub fn next_id(&self, prefix: &str) -> String {
         format!("{prefix}-{}", self.seq.fetch_add(1, Ordering::Relaxed))
+    }
+
+    /// Keeps the control session and its browser ownership alive for the
+    /// lifetime of a tool call or approval prompt.
+    pub fn track_active_call(&self) -> ActiveCallGuard<'_> {
+        self.active_calls.fetch_add(1, Ordering::AcqRel);
+        ActiveCallGuard { state: self }
     }
 
     /* ── settings ── */
@@ -459,6 +555,7 @@ impl AppState {
             return;
         }
         self.session_allows.write().clear();
+        self.browser.release_owner();
         self.update_control(|c| {
             c.phase = ControlPhase::Idle;
             c.agent = None;
@@ -478,12 +575,14 @@ impl AppState {
     pub fn abort(&self) {
         *self.aborted.write() = true;
         let pending: Vec<_> = self.approvals.write().drain().collect();
-        for (_, tx) in pending {
-            let _ = tx.send(Decision::Deny);
+        for (_, waiter) in pending {
+            let _ = waiter.sender.send(Decision::Deny);
         }
         self.end_control();
         // After `end_control`, so it survives that update and reaches the UI.
         self.update_control(|c| c.stopped = true);
+        let browser = self.browser.clone();
+        tauri::async_runtime::spawn(async move { browser.panic_stop().await });
     }
 
     /// Hands control back, so agents may start a new session.
@@ -510,18 +609,54 @@ impl AppState {
         }
     }
 
+    /// An MCP client disappearing invalidates every short-lived approval. A
+    /// grant is intentionally never allowed to leak into a later client.
+    pub fn clear_session_grants(&self) {
+        self.session_allows.write().clear();
+    }
+
     /// Registers an approval request and hands back the receiver to await.
     pub fn open_approval(&self, req: PendingApproval) -> oneshot::Receiver<Decision> {
         let (tx, rx) = oneshot::channel();
-        self.approvals.write().insert(req.id.clone(), tx);
+        let browser = req.category.is_some()
+            || req.tool.starts_with("browser_")
+            || req.tool.starts_with("browser:");
+        self.approvals.write().insert(
+            req.id.clone(),
+            ApprovalWaiter {
+                browser,
+                sender: tx,
+            },
+        );
         let _ = self.app.emit("control:approval", Some(&req));
         rx
     }
 
     pub fn resolve_approval(&self, id: &str, decision: Decision) {
-        if let Some(tx) = self.approvals.write().remove(id) {
-            let _ = tx.send(decision);
+        if let Some(waiter) = self.approvals.write().remove(id) {
+            let _ = waiter.sender.send(decision);
         }
+        let _ = self.app.emit("control:approval", Option::<PendingApproval>::None);
+    }
+
+    /// Denies only browser-related approval cards. Browser Stop and Restart
+    /// must cancel requests waiting at the policy gate as well as calls that
+    /// have already reached Chromium.
+    pub fn cancel_browser_approvals(&self) {
+        let mut approvals = self.approvals.write();
+        let ids: Vec<_> = approvals
+            .iter()
+            .filter_map(|(id, waiter)| waiter.browser.then_some(id.clone()))
+            .collect();
+        if ids.is_empty() {
+            return;
+        }
+        for id in ids {
+            if let Some(waiter) = approvals.remove(&id) {
+                let _ = waiter.sender.send(Decision::Deny);
+            }
+        }
+        drop(approvals);
         let _ = self.app.emit("control:approval", Option::<PendingApproval>::None);
     }
 
@@ -554,6 +689,17 @@ impl AppState {
     }
 }
 
+pub struct ActiveCallGuard<'a> {
+    state: &'a AppState,
+}
+
+impl Drop for ActiveCallGuard<'_> {
+    fn drop(&mut self) {
+        self.state.active_calls.fetch_sub(1, Ordering::AcqRel);
+        self.state.touch();
+    }
+}
+
 pub fn now_millis() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -562,8 +708,12 @@ pub fn now_millis() -> u64 {
 }
 
 /// The tool catalog, shaped for the UI.
-pub fn catalog_for_ui() -> Vec<catalog::ToolDef> {
-    catalog::CATALOG.to_vec()
+pub fn catalog_for_ui(browser_ready: bool) -> Vec<catalog::ToolDef> {
+    catalog::CATALOG
+        .iter()
+        .filter(|tool| browser_ready || !matches!(tool.group, catalog::ToolGroup::Browser))
+        .cloned()
+        .collect()
 }
 
 #[cfg(test)]
@@ -659,5 +809,18 @@ mod tests {
         // `portalError === null` check reads undefined and shows the wrong
         // branch while the prompt is still open.
         assert!(json["portalError"].is_null());
+    }
+
+    #[test]
+    fn browser_tools_are_hidden_until_the_runtime_is_ready() {
+        let without_browser = catalog_for_ui(false);
+        let with_browser = catalog_for_ui(true);
+        assert_eq!(without_browser.len(), 24);
+        assert_eq!(with_browser.len(), 44);
+        assert!(
+            without_browser
+                .iter()
+                .all(|tool| !matches!(tool.group, crate::mcp::catalog::ToolGroup::Browser))
+        );
     }
 }

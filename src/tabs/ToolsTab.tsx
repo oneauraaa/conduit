@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { motion } from "motion/react";
-import { Accessibility, Eye, Keyboard, Lock, Terminal, AppWindow } from "lucide-react";
+import { Accessibility, Eye, Globe2, Keyboard, Lock, Terminal, AppWindow } from "lucide-react";
 import { Card, Row, SectionLabel, TabShell } from "@/components/Panel";
 import { Segmented, type SegmentOption } from "@/components/Segmented";
 import { Switch } from "@/components/Switch";
@@ -32,6 +32,7 @@ const GROUPS: { id: ToolGroup; label: string; icon: typeof Eye }[] = [
   { id: "windows", label: "windows & apps", icon: AppWindow },
   { id: "accessibility", label: "accessibility", icon: Accessibility },
   { id: "system", label: "system", icon: Terminal },
+  { id: "browser", label: "browser", icon: Globe2 },
 ];
 
 export function ToolsTab() {

@@ -7,6 +7,7 @@
 import { isLinux, isWindows } from "./platform";
 import type {
   AgentTarget,
+  BrowserState,
   ControlState,
   HyprlandState,
   Keybind,
@@ -86,6 +87,56 @@ export const settings: Settings = {
   corsOrigins: [],
   startOnLogin: false,
   startHidden: false,
+  browserPermissions: {
+    openWebsites: "alwaysAllow",
+    readHistory: "alwaysAllow",
+    downloadFiles: "alwaysAsk",
+    uploadFiles: "alwaysAsk",
+  },
+};
+
+const browserDemo = isStandalone
+  ? new URLSearchParams(window.location.search).get("browser")
+  : null;
+
+export const browser: BrowserState = {
+  install: {
+    status:
+      browserDemo === "ready" || browserDemo === "visible"
+        ? "ready"
+        : browserDemo === "downloading"
+          ? "downloading"
+          : browserDemo === "error"
+            ? "error"
+            : "unavailable",
+    expectedRevision: "playwright-mcp-0.0.80-chromium-1243",
+    installedRevision:
+      browserDemo === "ready" || browserDemo === "visible"
+        ? "playwright-mcp-0.0.80-chromium-1243"
+        : null,
+    downloadedBytes: browserDemo === "downloading" ? 78_960000 : 0,
+    totalBytes: 184320000,
+    error: browserDemo === "error" ? "the download did not pass its integrity check" : null,
+  },
+  runStatus: browserDemo === "ready" || browserDemo === "visible" ? "running" : "stopped",
+  mode: browserDemo === "visible" ? "visible" : "headless",
+  selectedProfileId: "profile-default",
+  profiles: [
+    { id: "profile-default", name: "Default", incognito: false },
+    { id: "profile-work", name: "Work", incognito: false },
+    { id: "incognito", name: "Incognito", incognito: true },
+  ],
+  tabs:
+    browserDemo === "ready" || browserDemo === "visible"
+      ? [
+          { index: 0, title: "Conduit Browser", url: "https://example.com", active: true },
+          { index: 1, title: "Documentation", url: "https://playwright.dev", active: false },
+        ]
+      : [],
+  downloads: [],
+  preview: null,
+  stopLatched: false,
+  owner: browserDemo === "ready" ? "codex" : null,
 };
 
 const host = isWindows ? "desktop-7f2k1" : isLinux ? "cachyos-box" : "mac-studio";
@@ -236,6 +287,29 @@ export const catalog: ToolDef[] = [
   { name: "wait", group: "system", summary: "pause, to let the ui settle", risky: false },
   { name: "notify", group: "system", summary: "post a notification", risky: false },
   { name: "list_keybinds", group: "system", summary: "the keyboard shortcuts the user has bound", risky: false },
+];
+
+export const browserCatalog: ToolDef[] = [
+  { name: "browser_navigate", group: "browser", summary: "navigate the active page to a URL", risky: false },
+  { name: "browser_navigate_back", group: "browser", summary: "go back in the active page", risky: false },
+  { name: "browser_snapshot", group: "browser", summary: "read an accessibility snapshot of the page", risky: false },
+  { name: "browser_find", group: "browser", summary: "find text in the current page", risky: false },
+  { name: "browser_click", group: "browser", summary: "click an element from a snapshot", risky: false },
+  { name: "browser_type", group: "browser", summary: "type into an editable element", risky: false },
+  { name: "browser_fill_form", group: "browser", summary: "fill several form fields", risky: false },
+  { name: "browser_hover", group: "browser", summary: "hover over an element", risky: false },
+  { name: "browser_drag", group: "browser", summary: "drag one page element to another", risky: false },
+  { name: "browser_drop", group: "browser", summary: "drop data or approved files on an element", risky: false },
+  { name: "browser_select_option", group: "browser", summary: "choose one or more select options", risky: false },
+  { name: "browser_press_key", group: "browser", summary: "press a keyboard key in the page", risky: false },
+  { name: "browser_handle_dialog", group: "browser", summary: "accept or dismiss a browser dialog", risky: false },
+  { name: "browser_file_upload", group: "browser", summary: "upload approved local files", risky: false },
+  { name: "browser_take_screenshot", group: "browser", summary: "capture the current web page", risky: false },
+  { name: "browser_wait_for", group: "browser", summary: "wait for time or page text", risky: false },
+  { name: "browser_tabs", group: "browser", summary: "list, create, close, or select tabs", risky: false },
+  { name: "browser_resize", group: "browser", summary: "resize the browser viewport", risky: false },
+  { name: "browser_close", group: "browser", summary: "close the active page", risky: true },
+  { name: "browser_history", group: "browser", summary: "search Conduit navigation history", risky: false },
 ];
 
 const home = isWindows ? "C:/Users/you" : "/Users/you";

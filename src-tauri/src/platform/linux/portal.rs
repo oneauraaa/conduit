@@ -441,11 +441,9 @@ pub fn warm_up() {
     std::thread::Builder::new()
         .name("conduit-portal".into())
         .spawn(|| {
-            if session().is_ok() {
-                // Capture only has streams to attach to once consent is in, so
-                // it starts from here rather than racing the dialog.
-                super::capture::start();
-            }
+            // Consent is warmed up, but no PipeWire consumer is attached here.
+            // The screenshot tool opens a one-frame stream on demand.
+            let _ = session();
         })
         .ok();
 }

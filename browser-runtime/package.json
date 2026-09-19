@@ -1,0 +1,30 @@
+{
+  "name": "conduit-browser-runtime",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Private Chromium sidecar shipped as an optional Conduit bundle",
+  "license": "MIT",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test sidecar.test.cjs sidecar.integration.test.cjs",
+    "test:unit": "node --test sidecar.test.cjs",
+    "test:integration": "node --test sidecar.integration.test.cjs",
+    "schemas": "node generate-schemas.cjs",
+    "relay:schemas": "node generate-schemas.cjs && node sync-relay-tools.cjs",
+    "build": "node generate-schemas.cjs && node build-runtime.cjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.26.0",
+    "@playwright/mcp": "0.0.80",
+    "playwright": "1.63.0-alpha-2026-08-31",
+    "playwright-core": "1.63.0-alpha-2026-08-31"
+  },
+  "devDependencies": {
+    "@yao-pkg/pkg": "6.22.0",
+    "archiver": "7.0.1",
+    "esbuild": "0.28.2"
+  }
+}

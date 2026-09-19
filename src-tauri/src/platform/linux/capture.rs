@@ -1,6 +1,6 @@
 //! Screen capture, off the PipeWire streams the portal session already owns.
 //!
-//! ## Why a live stream and not a screenshot per call
+//! ## On-demand capture
 //!
 //! `org.freedesktop.portal.Screenshot` exists and is three lines to call. It is
 //! the wrong tool here: it raises its own consent dialog (a second one), it
@@ -9,17 +9,11 @@
 //! before nearly every action, so per-call file I/O is paid hundreds of times a
 //! session.
 //!
-//! The portal session conduit *already needs* for absolute pointer coordinates
-//! (see [`super::portal`]) comes with PipeWire streams attached. Consuming them
-//! makes `capture` a memcpy out of the newest frame — no dialog, no disk, no
-//! per-call negotiation.
-//!
-//! ## The cost, stated plainly
-//!
-//! A live stream means the compositor is compositing frames conduit mostly
-//! throws away. That is why the framerate is negotiated low: a screen-reading
-//! agent does not need 60fps, and [`TARGET_FPS`] is the knob that keeps this
-//! from being a background GPU tax.
+//! The portal session conduit already needs for absolute pointer coordinates
+//! (see [`super::portal`]) grants PipeWire nodes without forcing Conduit to
+//! consume them continuously. Each `screenshot` call connects to only the
+//! requested node, takes one frame, then drops the stream before returning.
+//! Between tool calls there is no capture thread and no compositor frame pump.
 //!
 //! ## Traps
 //!
@@ -31,14 +25,15 @@
 //!   the compositor will happily hand over GPU buffers, which `MAP_BUFFERS`
 //!   cannot map and which need EGL to read. Advertising only BGRx/RGBx/BGRA/
 //!   RGBA is what keeps the server on memfd.
-//! - **The PipeWire main loop owns its thread.** It is `!Send`, so it gets a
-//!   dedicated thread and talks to the rest of conduit through [`FRAMES`].
+//! - **The PipeWire main loop is `!Send`.** The MCP handler already calls this
+//!   module from `spawn_blocking`, so the loop can live synchronously on that
+//!   worker for the lifetime of one screenshot.
 
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use image::{ImageEncoder, codecs::png::PngEncoder};
-use parking_lot::RwLock;
+use parking_lot::Mutex;
 use pipewire as pw;
 use pw::spa;
 use spa::param::format::{MediaSubtype, MediaType};
@@ -48,22 +43,16 @@ use spa::utils::Direction;
 
 use crate::platform::types::{Display, Shot};
 
-/// Frames per second to negotiate.
-///
-/// Deliberately low. Every frame the compositor produces for conduit is one it
-/// composites on top of its real work, and an agent reading the screen wants a
-/// *recent* frame, not a fresh one. 10fps keeps the newest frame under 100ms
-/// old — well inside the time an agent spends deciding what to do with it.
-const TARGET_FPS: u32 = 10;
+/// A fresh stream should yield its one frame promptly. This is not a background
+/// rate: the stream is closed immediately after the first frame arrives.
+const ON_DEMAND_FPS: u32 = 30;
 
 /// How long `capture` waits for the first frame of a stream that has only just
 /// started. After this it reports honestly rather than returning a black image.
 const FIRST_FRAME_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// The newest frame from each stream, keyed by PipeWire node id.
-static FRAMES: RwLock<Option<HashMap<u32, Frame>>> = RwLock::new(None);
-/// Guards against starting the capture thread twice.
-static STARTED: AtomicBool = AtomicBool::new(false);
+/// Avoid opening two compositor streams when clients race screenshot calls.
+static CAPTURE_LOCK: Mutex<()> = Mutex::new(());
 
 /// One decoded frame, already converted to RGBA and tightly packed.
 #[derive(Clone)]
@@ -75,25 +64,6 @@ struct Frame {
 
 /* ── the public surface ───────────────────────────────────────── */
 
-/// Starts the capture thread. Idempotent; called once consent is in.
-pub fn start() {
-    if STARTED.swap(true, Ordering::SeqCst) {
-        return;
-    }
-
-    std::thread::Builder::new()
-        .name("conduit-capture".into())
-        .spawn(|| {
-            if let Err(e) = run() {
-                tracing::warn!("screen capture is unavailable: {e}");
-                // Let a later attempt retry rather than wedging capture for the
-                // life of the process.
-                STARTED.store(false, Ordering::SeqCst);
-            }
-        })
-        .ok();
-}
-
 /// Captures `display`, optionally cropping to `region` and scaling the result.
 ///
 /// `region` is relative to the display's own origin, in the same space the rest
@@ -104,6 +74,7 @@ pub fn capture(
     region: Option<(f64, f64, f64, f64)>,
     scale: f64,
 ) -> Result<Shot, String> {
+    let _capture = CAPTURE_LOCK.lock();
     let session = super::portal::session().map_err(|e| e.message())?;
 
     // Displays and streams are both ordered top-to-bottom, left-to-right, so
@@ -121,8 +92,7 @@ pub fn capture(
         .or_else(|| session.streams().first())
         .ok_or("the portal session is sharing no screens")?;
 
-    start();
-    let frame = await_frame(stream.node_id)?;
+    let frame = capture_frame(stream.node_id)?;
 
     let (rx, ry, rw, rh) = region.unwrap_or((0.0, 0.0, display.width, display.height));
 
@@ -167,38 +137,6 @@ pub fn capture(
     })
 }
 
-/// Whether at least one frame has arrived — the readiness card's "screenshots
-/// work" signal, without taking one.
-pub fn has_frames() -> bool {
-    FRAMES
-        .read()
-        .as_ref()
-        .map(|f| !f.is_empty())
-        .unwrap_or(false)
-}
-
-fn await_frame(node_id: u32) -> Result<Frame, String> {
-    let deadline = std::time::Instant::now() + FIRST_FRAME_TIMEOUT;
-    loop {
-        if let Some(frame) = FRAMES
-            .read()
-            .as_ref()
-            .and_then(|frames| frames.get(&node_id))
-            .cloned()
-        {
-            return Ok(frame);
-        }
-        if std::time::Instant::now() >= deadline {
-            return Err(
-                "no frames have arrived from the screen-sharing stream yet. if the \
-                 sharing dialog is still open, answer it and try again."
-                    .into(),
-            );
-        }
-        std::thread::sleep(std::time::Duration::from_millis(25));
-    }
-}
-
 fn crop(frame: &Frame, x: u32, y: u32, w: u32, h: u32) -> Vec<u8> {
     if x == 0 && y == 0 && w == frame.width && h == frame.height {
         return frame.rgba.clone();
@@ -240,12 +178,13 @@ fn resize(rgba: &[u8], w: u32, h: u32, out_w: u32, out_h: u32) -> Vec<u8> {
 struct StreamState {
     node_id: u32,
     info: Option<VideoInfoRaw>,
+    frame: Rc<RefCell<Option<Frame>>>,
+    mainloop: pw::main_loop::MainLoopWeak,
 }
 
-fn run() -> Result<(), String> {
+fn capture_frame(node_id: u32) -> Result<Frame, String> {
     let session = super::portal::session().map_err(|e| e.message())?;
     let fd = session.pipewire_fd()?;
-    let nodes: Vec<u32> = session.streams().iter().map(|s| s.node_id).collect();
 
     pw::init();
 
@@ -257,120 +196,121 @@ fn run() -> Result<(), String> {
         .connect_fd_rc(unsafe { std::os::fd::FromRawFd::from_raw_fd(fd) }, None)
         .map_err(|e| format!("could not connect to pipewire: {e}"))?;
 
-    *FRAMES.write() = Some(HashMap::new());
+    let captured = Rc::new(RefCell::new(None));
+    let stream = pw::stream::StreamBox::new(
+        &core,
+        "conduit-capture-on-demand",
+        pw::properties::properties! {
+            *pw::keys::MEDIA_TYPE => "Video",
+            *pw::keys::MEDIA_CATEGORY => "Capture",
+            *pw::keys::MEDIA_ROLE => "Screen",
+        },
+    )
+    .map_err(|e| format!("could not create a capture stream: {e}"))?;
 
-    // Streams and their listeners must outlive the loop, so they are kept in
-    // scope here rather than dropped at the end of a helper.
-    let mut kept = Vec::new();
+    let listener = stream
+        .add_local_listener_with_user_data(StreamState {
+            node_id,
+            info: None,
+            frame: Rc::clone(&captured),
+            mainloop: mainloop.downgrade(),
+        })
+        .state_changed(|_, state, old, new| {
+            tracing::debug!(node = state.node_id, ?old, ?new, "capture stream state");
+        })
+        .param_changed(|_, state, id, param| {
+            let Some(param) = param else { return };
+            if id != spa::param::ParamType::Format.as_raw() {
+                return;
+            }
+            let Ok((media_type, media_subtype)) = spa::param::format_utils::parse_format(param)
+            else {
+                return;
+            };
+            if media_type != MediaType::Video || media_subtype != MediaSubtype::Raw {
+                return;
+            }
+            let mut info = VideoInfoRaw::default();
+            if info.parse(param).is_err() {
+                return;
+            }
+            tracing::info!(
+                node = state.node_id,
+                width = info.size().width,
+                height = info.size().height,
+                format = ?info.format(),
+                "capture format negotiated"
+            );
+            state.info = Some(info);
+        })
+        .process(|stream, state| {
+            let Some(info) = state.info else { return };
+            let Some(mut buffer) = stream.dequeue_buffer() else {
+                return;
+            };
+            let datas = buffer.datas_mut();
+            if datas.is_empty() {
+                return;
+            }
 
-    for node_id in nodes {
-        let stream = pw::stream::StreamBox::new(
-            &core,
-            "conduit-capture",
-            pw::properties::properties! {
-                *pw::keys::MEDIA_TYPE => "Video",
-                *pw::keys::MEDIA_CATEGORY => "Capture",
-                *pw::keys::MEDIA_ROLE => "Screen",
-            },
+            let stride = datas[0].chunk().stride() as usize;
+            let Some(bytes) = datas[0].data() else {
+                // No mapped pointer means the server handed over a DMA-BUF
+                // despite the format ask. Nothing to do but skip; the
+                // readiness card reports "no frames" rather than lying.
+                return;
+            };
+
+            let (w, h) = (info.size().width, info.size().height);
+            let Some(rgba) = to_rgba(bytes, stride, w, h, info.format()) else {
+                return;
+            };
+
+            if state.frame.borrow().is_none() {
+                *state.frame.borrow_mut() = Some(Frame {
+                    rgba,
+                    width: w,
+                    height: h,
+                });
+                if let Some(mainloop) = state.mainloop.upgrade() {
+                    mainloop.quit();
+                }
+            }
+        })
+        .register()
+        .map_err(|e| format!("could not register a capture listener: {e}"))?;
+
+    let values = format_pod();
+    let pod = Pod::from_bytes(&values).ok_or("could not build a capture format")?;
+    let mut params = [pod];
+    stream
+        .connect(
+            Direction::Input,
+            Some(node_id),
+            pw::stream::StreamFlags::AUTOCONNECT | pw::stream::StreamFlags::MAP_BUFFERS,
+            &mut params,
         )
-        .map_err(|e| format!("could not create a capture stream: {e}"))?;
+        .map_err(|e| format!("could not connect a capture stream: {e}"))?;
 
-        let listener = stream
-            .add_local_listener_with_user_data(StreamState {
-                node_id,
-                info: None,
-            })
-            .state_changed(|_, state, old, new| {
-                tracing::debug!(node = state.node_id, ?old, ?new, "capture stream state");
-            })
-            .param_changed(|_, state, id, param| {
-                let Some(param) = param else { return };
-                if id != spa::param::ParamType::Format.as_raw() {
-                    return;
-                }
-                let Ok((media_type, media_subtype)) = spa::param::format_utils::parse_format(param)
-                else {
-                    return;
-                };
-                if media_type != MediaType::Video || media_subtype != MediaSubtype::Raw {
-                    return;
-                }
-                let mut info = VideoInfoRaw::default();
-                if info.parse(param).is_err() {
-                    return;
-                }
-                tracing::info!(
-                    node = state.node_id,
-                    width = info.size().width,
-                    height = info.size().height,
-                    format = ?info.format(),
-                    "capture format negotiated"
-                );
-                state.info = Some(info);
-            })
-            .process(|stream, state| {
-                let Some(info) = state.info else { return };
-                let Some(mut buffer) = stream.dequeue_buffer() else {
-                    return;
-                };
-                let datas = buffer.datas_mut();
-                if datas.is_empty() {
-                    return;
-                }
-
-                let stride = datas[0].chunk().stride() as usize;
-                let Some(bytes) = datas[0].data() else {
-                    // No mapped pointer means the server handed over a DMA-BUF
-                    // despite the format ask. Nothing to do but skip; the
-                    // readiness card reports "no frames" rather than lying.
-                    return;
-                };
-
-                let (w, h) = (info.size().width, info.size().height);
-                let Some(rgba) = to_rgba(bytes, stride, w, h, info.format()) else {
-                    return;
-                };
-
-                if let Some(frames) = FRAMES.write().as_mut() {
-                    frames.insert(
-                        state.node_id,
-                        Frame {
-                            rgba,
-                            width: w,
-                            height: h,
-                        },
-                    );
-                }
-            })
-            .register()
-            .map_err(|e| format!("could not register a capture listener: {e}"))?;
-
-        let values = format_pod();
-        let pod = Pod::from_bytes(&values).ok_or("could not build a capture format")?;
-        let mut params = [pod];
-
-        stream
-            .connect(
-                Direction::Input,
-                Some(node_id),
-                pw::stream::StreamFlags::AUTOCONNECT | pw::stream::StreamFlags::MAP_BUFFERS,
-                &mut params,
-            )
-            .map_err(|e| format!("could not connect a capture stream: {e}"))?;
-
-        kept.push((stream, listener));
-    }
-
-    tracing::info!(streams = kept.len(), "screen capture running");
+    let timeout_loop = mainloop.clone();
+    let timer = mainloop.loop_().add_timer(move |_| timeout_loop.quit());
+    timer.update_timer(Some(FIRST_FRAME_TIMEOUT), None);
     mainloop.run();
-    Ok(())
+    drop(listener);
+    drop(stream);
+    let frame = captured.borrow_mut().take();
+    frame.ok_or_else(|| {
+        "the display did not produce an on-demand frame in time; answer the sharing dialog and try again"
+            .into()
+    })
 }
 
 /// The format conduit will accept.
 ///
 /// Packed 32-bit RGB only, and no DMA-BUF modifiers — see the module header.
-/// Framerate is a range with [`TARGET_FPS`] as the default so the compositor
-/// can settle lower if it wants, but never runs flat out for conduit's benefit.
+/// Framerate is a range with [`ON_DEMAND_FPS`] as the default. The stream lasts
+/// for one frame only, so this controls first-frame latency rather than a
+/// background capture rate.
 fn format_pod() -> Vec<u8> {
     let obj = spa::pod::object!(
         spa::utils::SpaTypes::ObjectParamFormat,
@@ -420,12 +360,12 @@ fn format_pod() -> Vec<u8> {
             Range,
             Fraction,
             spa::utils::Fraction {
-                num: TARGET_FPS,
+                num: ON_DEMAND_FPS,
                 denom: 1
             },
             spa::utils::Fraction { num: 0, denom: 1 },
             spa::utils::Fraction {
-                num: TARGET_FPS,
+                num: ON_DEMAND_FPS,
                 denom: 1
             }
         ),

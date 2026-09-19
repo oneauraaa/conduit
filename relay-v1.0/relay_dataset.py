@@ -29,7 +29,9 @@ POLICY = (
     'Conduit enforces approvals: Auto gates run_shell (including read-only commands), quit_app, and '
     'clipboard_write; Manual gates every tool; Full Access has no routine approval card. Session grants '
     'may apply. In Auto, explain and request approval for those three tools unless the user already '
-    'approved the exact action. Ordinary navigation needs no extra chat confirmation. A chat approval '
+    'approved the exact action. Browser permission rows override the global mode for opening websites, '
+    'reading profile history, downloading, and uploading. Always Ask still prompts in Full; Always Allow '
+    'does not prompt in Manual. The defaults allow opening/history and ask for downloads/uploads. A chat approval '
     'does not override Conduit. Respect denial, disabled tools, panic stop, and the self-UI guard; never '
     'retry through another tool to evade them. Stay within the user request in every mode.'
 )
@@ -39,7 +41,17 @@ MENUS = {
     'pointer': ['move_cursor','get_cursor_position','click','drag','scroll','find_element','list_displays'],
     'windows': ['list_windows','focus_window','set_window_bounds','list_apps','open_app','quit_app','read_screen_text'],
     'system': ['web_search','clipboard_read','clipboard_write','run_shell','notify','wait','list_apps'],
+    'browser': ['browser_navigate','browser_snapshot','browser_find','browser_click','browser_tabs','browser_history'],
 }
+
+BROWSER_CATEGORIES = {'openWebsites','readHistory','downloadFiles','uploadFiles'}
+
+
+def system_prompt(platform,mode,browser_permissions=None):
+    suffix = ''
+    if browser_permissions is not None:
+        suffix = '\nBrowser permissions: ' + json.dumps(browser_permissions,sort_keys=True,separators=(',',':')) + '.'
+    return f"{POLICY}\nHost: {HOSTS[platform]}\nAccess mode: {mode}.{suffix}"
 
 
 def load_json(path):
@@ -75,7 +87,8 @@ def build_records(tools):
         for host in scenario.get('hosts', ['hyprland','macos','windows']):
             mode = scenario.get('mode', 'auto')
             row_id = scenario['id'] + '-' + host
-            messages = [{'role':'system','content':f"{POLICY}\nHost: {HOSTS[host]}\nAccess mode: {mode}."}]
+            permissions = scenario.get('browser_permissions')
+            messages = [{'role':'system','content':system_prompt(host,mode,permissions)}]
             approvals = []
             for original in scenario['messages']:
                 m = copy.deepcopy(original)
@@ -104,6 +117,8 @@ def build_records(tools):
                 'tools':[model_tool(by_name[n]) for n in offered],
                 'messages':messages, 'approvals':approvals,
             })
+            if permissions is not None:
+                rows[-1]['browser_permissions']=permissions
     return rows
 
 
@@ -147,7 +162,16 @@ def validate_args(tool, arguments):
 def render_tool_call_xml(name, arguments):
     parts = ['<tool_call>', f'<function={name}>']
     for k,v in arguments.items():
-        v = v if isinstance(v,str) else json.dumps(v,ensure_ascii=False)
+        # Ornith's native Qwen template renders a top-level boolean as Python's
+        # `True`/`False`, while arrays and objects use JSON. Match the targets
+        # the tokenizer actually produces so validation and inference scoring
+        # speak the same wire dialect.
+        if isinstance(v, str):
+            v = v
+        elif type(v) is bool:
+            v = str(v)
+        else:
+            v = json.dumps(v,ensure_ascii=False)
         parts.extend([f'<parameter={k}>',v,'</parameter>'])
     return '\n'.join(parts+['</function>','</tool_call>'])
 
@@ -163,12 +187,17 @@ def parse_tool_call_xml(text, tools_by_name=None):
         raise ValueError('unknown function')
     args = {}
     while body.strip():
-        p = re.match(r'\s*<parameter=([a-z_]+)>\n(.*?)\n</parameter>\n?',body,re.S)
+        p = re.match(r'\s*<parameter=([a-zA-Z_]+)>\n(.*?)\n</parameter>\n?',body,re.S)
         if not p or p[1] in args or p[1] not in schema['parameters']['properties']:
             raise ValueError('malformed, duplicate, or unknown parameter')
         key,raw = p.groups()
         kind = schema['parameters']['properties'][key]['type']
-        args[key] = raw if kind == 'string' else json.loads(raw)
+        if kind == 'string':
+            args[key] = raw
+        elif kind == 'boolean' and raw in ('True', 'False'):
+            args[key] = raw == 'True'
+        else:
+            args[key] = json.loads(raw)
         body = body[p.end():]
     validate_args(schema,args)
     return name,args
@@ -180,7 +209,7 @@ def validate_record(r, by_name):
         raise ValueError('invalid mode or platform')
     if len(msgs)<3 or [m['role'] for m in msgs[:2]] != ['system','user'] or msgs[-1]['role'] != 'assistant':
         raise ValueError('expected system/user start and assistant target at end')
-    if msgs[0]['content'] != f"{POLICY}\nHost: {HOSTS[r['platform']]}\nAccess mode: {r['mode']}.":
+    if msgs[0]['content'] != system_prompt(r['platform'],r['mode'],r.get('browser_permissions')):
         raise ValueError('host/mode context disagrees with metadata')
     offered = [t['function']['name'] for t in r['tools']]
     if len(offered)<4 or len(set(offered)) != len(offered):
@@ -195,6 +224,14 @@ def validate_record(r, by_name):
             raise ValueError('invalid approval annotation')
         if not 1 <= idx < len(msgs) or msgs[idx]['role'] != 'user':
             raise ValueError('approval must reference a user turn')
+        if a.get('category') is not None and a['category'] not in BROWSER_CATEGORIES:
+            raise ValueError('invalid browser permission category')
+        if a.get('session') and (
+            a['decision'] != 'allow'
+            or a['source'] != 'requested'
+            or a.get('category') not in BROWSER_CATEGORIES
+        ):
+            raise ValueError('session approval must allow a requested browser category')
         if a['source']=='requested' and (req != idx-1 or msgs[req]['role']!='assistant' or msgs[req].get('tool_calls')):
             raise ValueError('approval request must precede the user decision')
         validate_args(by_name[a['tool']],a['arguments'])
@@ -234,9 +271,28 @@ def validate_record(r, by_name):
                 raise ValueError('window id must come from the preceding window listing')
             if parse_tool_call_xml(render_tool_call_xml(name,args),by_name)!=(name,args):
                 raise ValueError('tool call does not round-trip through Ornith syntax')
-            if r['mode']=='auto' and by_name[name]['risky']:
-                matches = [a for a in approvals if a['tool']==name and a['arguments']==args and a['decision_index']<i]
-                if not matches or max(matches,key=lambda a:a['decision_index'])['decision']!='allow':
+            category = {
+                'browser_navigate':'openWebsites', 'browser_navigate_back':'openWebsites',
+                'browser_history':'readHistory', 'browser_file_upload':'uploadFiles',
+            }.get(name)
+            if name=='browser_drop' and args.get('paths'):
+                category='uploadFiles'
+            matching = [a for a in approvals if a['tool']==name and a['arguments']==args and a['decision_index']<i]
+            if category is None:
+                annotated = [a for a in matching if a.get('category') in BROWSER_CATEGORIES]
+                if annotated:
+                    category=annotated[-1]['category']
+            permissions = r.get('browser_permissions',{})
+            permission_prompt = category is not None and permissions.get(category)=='alwaysAsk'
+            session_granted = category is not None and any(
+                a.get('session')
+                and a.get('category') == category
+                and a['decision'] == 'allow'
+                and a['decision_index'] < i
+                for a in approvals
+            )
+            if (r['mode']=='auto' and by_name[name]['risky']) or (permission_prompt and not session_granted):
+                if not matching or max(matching,key=lambda a:a['decision_index'])['decision']!='allow':
                     raise ValueError('risky Auto Mode call needs prior exact approval')
             pending = c
     # Final assistant calls are deliberate next-action targets, especially for screenshots.

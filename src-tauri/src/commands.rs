@@ -3,10 +3,12 @@
 use tauri::{AppHandle, Emitter, Manager, State, Wry};
 
 use crate::agents::{self, AgentTarget};
+use crate::browser::model::{BrowserMode, BrowserRestartStrategy, BrowserState};
 use crate::mcp::{catalog::ToolDef, server};
 use crate::platform::permissions;
 use crate::state::{
-    AccessMode, ControlState, Decision, Readiness, ServerState, Settings, Shared, ToolsAccess,
+    AccessMode, BrowserPermissionCategory, BrowserPermissionMode, ControlState, Decision,
+    Readiness, ServerState, Settings, Shared, ToolsAccess,
 };
 
 /* ── server ── */
@@ -62,8 +64,8 @@ pub fn get_settings(state: State<'_, Shared>) -> Settings {
 }
 
 #[tauri::command]
-pub fn get_tool_catalog() -> Vec<ToolDef> {
-    crate::state::catalog_for_ui()
+pub fn get_tool_catalog(state: State<'_, Shared>) -> Vec<ToolDef> {
+    crate::state::catalog_for_ui(state.browser.ready())
 }
 
 #[tauri::command]
@@ -81,6 +83,123 @@ pub fn set_tool_enabled(state: State<'_, Shared>, tool: String, enabled: bool) -
     state.update_settings(|s| {
         s.tool_toggles.insert(tool, enabled);
     })
+}
+
+/* ── built-in browser ── */
+
+#[tauri::command]
+pub fn get_browser_state(state: State<'_, Shared>) -> BrowserState {
+    state.browser.snapshot()
+}
+
+#[tauri::command]
+pub async fn refresh_browser_install(state: State<'_, Shared>) -> Result<BrowserState, String> {
+    state.browser.clone().refresh_install_metadata().await
+}
+
+#[tauri::command]
+pub async fn install_browser(state: State<'_, Shared>) -> Result<BrowserState, String> {
+    let browser = state.browser.clone();
+    browser.clone().install().await?;
+    Ok(browser.snapshot())
+}
+
+#[tauri::command]
+pub fn cancel_browser_install(state: State<'_, Shared>) {
+    state.browser.cancel_install();
+}
+
+#[tauri::command]
+pub async fn start_browser(state: State<'_, Shared>) -> Result<BrowserState, String> {
+    let browser = state.browser.clone();
+    browser.start(true, None, None).await
+}
+
+#[tauri::command]
+pub async fn stop_browser(state: State<'_, Shared>) -> Result<BrowserState, String> {
+    let browser = state.browser.clone();
+    Ok(browser.stop(true).await)
+}
+
+#[tauri::command]
+pub async fn set_browser_mode(
+    state: State<'_, Shared>,
+    mode: BrowserMode,
+    restart: Option<BrowserRestartStrategy>,
+) -> Result<BrowserState, String> {
+    let browser = state.browser.clone();
+    browser.set_mode(mode, restart).await
+}
+
+#[tauri::command]
+pub async fn select_browser_profile(
+    state: State<'_, Shared>,
+    profile_id: String,
+    restart: Option<BrowserRestartStrategy>,
+) -> Result<BrowserState, String> {
+    let browser = state.browser.clone();
+    browser.select_profile(profile_id, restart).await
+}
+
+#[tauri::command]
+pub fn create_browser_profile(
+    state: State<'_, Shared>,
+    name: String,
+) -> Result<BrowserState, String> {
+    state.browser.create_profile(name)
+}
+
+#[tauri::command]
+pub fn rename_browser_profile(
+    state: State<'_, Shared>,
+    id: String,
+    name: String,
+) -> Result<BrowserState, String> {
+    state.browser.rename_profile(id, name)
+}
+
+#[tauri::command]
+pub fn delete_browser_profile(
+    state: State<'_, Shared>,
+    id: String,
+) -> Result<BrowserState, String> {
+    state.browser.delete_profile(id)
+}
+
+#[tauri::command]
+pub fn set_browser_permission(
+    state: State<'_, Shared>,
+    category: BrowserPermissionCategory,
+    mode: BrowserPermissionMode,
+) -> Settings {
+    state.update_settings(|settings| match category {
+        BrowserPermissionCategory::OpenWebsites => {
+            settings.browser_permissions.open_websites = mode
+        }
+        BrowserPermissionCategory::ReadHistory => settings.browser_permissions.read_history = mode,
+        BrowserPermissionCategory::DownloadFiles => {
+            settings.browser_permissions.download_files = mode
+        }
+        BrowserPermissionCategory::UploadFiles => settings.browser_permissions.upload_files = mode,
+    })
+}
+
+#[tauri::command]
+pub async fn set_browser_tab_visible(
+    state: State<'_, Shared>,
+    visible: bool,
+) -> Result<(), String> {
+    let browser = state.browser.clone();
+    browser.set_tab_visible(visible).await
+}
+
+#[tauri::command]
+pub fn open_browser_downloads(state: State<'_, Shared>) -> Result<(), String> {
+    let path = state.browser.download_directory();
+    std::fs::create_dir_all(&path)
+        .map_err(|e| format!("could not create browser downloads folder: {e}"))?;
+    tauri_plugin_opener::open_path(path, None::<&str>)
+        .map_err(|e| format!("could not open browser downloads: {e}"))
 }
 
 /// Turns browser access on or off. Takes effect immediately — the origin

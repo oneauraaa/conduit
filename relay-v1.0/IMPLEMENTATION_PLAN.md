@@ -18,7 +18,7 @@
 - Create: `relay-v1.0/README.md`
 
 - [ ] Add `.gitignore` rules for `*.gguf`, `output/`, `cache/`, `__pycache__/`, and local model caches so the 5.78 GB reference file is never committed.
-- [ ] Add JSON configuration with model ID, reference GGUF path, output paths, seed, 2,048 max sequence length, one-example micro-batch, eight-step gradient accumulation, two epochs, 2e-4 learning rate, LoRA rank 16, alpha 32, dropout 0.05, and 90/10 split.
+- [ ] Add JSON configuration with model ID, reference GGUF path, output paths, seed, 2,048 max sequence length, one-example micro-batch, eight-step gradient accumulation, three epochs, 2e-4 learning rate, LoRA rank 16, alpha 32, dropout 0.05, and a deterministic family-aware split.
 - [ ] Document Studio/CLI setup, smoke and full commands, required disk space, expected VRAM, and that BF16 safetensors—not the existing GGUF—are the training input.
 - [ ] Validate JSON parsing and confirm `git status` does not stage the reference GGUF.
 
@@ -28,7 +28,7 @@
 - Create: `relay-v1.0/conduit_tools.json`
 - Test: `relay-v1.0/train_relay.py --prepare --validate-only`
 
-- [ ] Encode all 24 current tools from `src-tauri/src/mcp/tools.rs`: names, descriptions, JSON-schema arguments, required fields, group, and catalog `risky` flag.
+- [ ] Encode the 24 desktop tools plus the 20 optional browser tools from the pinned runtime schemas: names, descriptions, JSON-schema arguments, required fields, group, and catalog `risky` flag.
 - [ ] Mark `quit_app`, `clipboard_write`, and `run_shell` as approval-gated by default; leave inspection and ordinary UI tools non-risky, matching the Rust catalog.
 - [ ] Keep descriptions platform-neutral and state that runtime handshake data determines platform-specific capabilities.
 - [ ] Make the validator reject duplicate names, unknown required fields, missing argument schemas, and a schema/tool mismatch.
@@ -86,7 +86,7 @@
 - Create: `relay-v1.0/test_train_relay.py`
 
 - [ ] Test schema uniqueness, deterministic split, required arguments, XML parsing, tool-name validity, and Auto Mode approval records without importing CUDA libraries.
-- [ ] Score held-out output for exact tool name, required argument presence, XML parseability, and approval-before-risky-call behavior.
+- [ ] Score held-out output for exact tool name, required argument presence, XML parseability, and approval-before-risky-call behavior. Require 100% risky-action approval compliance, at least 95% schema-valid calls, and at least 90% exact-tool selection before export.
 - [ ] Write `output/evaluation.json` with counts and failures rather than a single accuracy number.
 - [ ] Run the pure-Python tests, `prepare --validate-only`, smoke loading, and export verification before claiming completion.
 

@@ -11,8 +11,8 @@
 //!      see and touch nothing. Granted by answering one dialog, and — unlike
 //!      every other portal grant — it cannot be made permanent, so it is asked
 //!      again on every launch. See [`super::portal`].
-//!   2. **Frames arriving.** A session can be live while capture is not, if the
-//!      compositor negotiated a buffer type conduit cannot map.
+//!   2. **Capture route ready.** The portal has granted screen nodes. Frame
+//!      delivery is tested only by an on-demand screenshot, never by polling.
 //!   3. **KWin.** Window listing, moving and focusing. Absent on GNOME and
 //!      wlroots, where those three tools report as unsupported and the rest
 //!      still works.
@@ -77,13 +77,14 @@ pub fn prompt_accessibility() -> bool {
 
 pub fn snapshot() -> Readiness {
     let session = super::portal::established();
+    let portal_ready = matches!(&session, Some(Ok(())));
     let input_error = super::sink::blocked_reason();
     let (accessibility_tree, accessibility_hint) = super::ax::readiness();
 
     Readiness::Linux {
         desktop: desktop(),
         wayland: wayland(),
-        portal_ready: matches!(session, Some(Ok(()))),
+        portal_ready,
         portal_error: match session {
             Some(Err(e)) => Some(e.message()),
             // Not attempted yet: the warm-up is still waiting on the dialog.
@@ -96,7 +97,10 @@ pub fn snapshot() -> Readiness {
         },
         input_ready: input_error.is_none(),
         input_error,
-        capture_ready: super::capture::has_frames(),
+        // Readiness means the portal granted screen nodes. Attaching a stream
+        // here would itself create the background capture load this status
+        // poll is meant to avoid; the screenshot call verifies frame delivery.
+        capture_ready: portal_ready,
         window_management: super::kwin::available(),
         accessibility_tree,
         accessibility_hint,

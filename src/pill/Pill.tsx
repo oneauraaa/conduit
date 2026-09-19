@@ -28,6 +28,7 @@ const DEMO_APPROVAL: PendingApproval = {
   summary: "wants to run a shell command",
   detail: "rm -rf ./build && pnpm build",
   agent: "claude code",
+  category: null,
 };
 
 const MODES: { value: AccessMode; label: string; blurb: string }[] = [
@@ -246,6 +247,7 @@ export function Pill() {
 
 /** Manual mode (and risky calls in auto) grow the pill into this. */
 function ApprovalCard({ approval }: { approval: PendingApproval }) {
+  const details = approval.detail ? readableApprovalDetails(approval.detail) : [];
   return (
     <>
       <div className="flex items-start gap-2.5 px-3.5 pt-3 pb-2.5">
@@ -258,10 +260,12 @@ function ApprovalCard({ approval }: { approval: PendingApproval }) {
             <span className="font-semibold">{approval.agent ?? "an agent"}</span>{" "}
             {approval.summary}
           </p>
-          {approval.detail && (
-            <p className="mt-0.5 truncate font-mono text-[10.5px] text-white/50">
-              {approval.detail}
-            </p>
+          {details.length > 0 && (
+            <div className="mt-1 max-h-[58px] space-y-0.5 overflow-y-auto pr-1 font-mono text-[9.5px] leading-snug text-white/55">
+              {details.map((detail) => (
+                <p key={detail} className="break-all">{detail}</p>
+              ))}
+            </div>
           )}
         </div>
       </div>
@@ -272,7 +276,7 @@ function ApprovalCard({ approval }: { approval: PendingApproval }) {
           onClick={() => void resolveApproval(approval.id, "allow")}
           className="conduit-gradient flex-1 rounded-lg px-3 py-1.5 text-[11.5px] font-semibold text-white transition-all hover:brightness-110 active:scale-[0.98]"
         >
-          allow
+          allow once
         </button>
         <button
           type="button"
@@ -292,4 +296,30 @@ function ApprovalCard({ approval }: { approval: PendingApproval }) {
       </div>
     </>
   );
+}
+
+function readableApprovalDetails(detail: string): string[] {
+  try {
+    const value = JSON.parse(detail) as Record<string, unknown>;
+    if (!value || Array.isArray(value) || typeof value !== "object") return [detail];
+    const labels: Record<string, string> = {
+      destinationUrl: "destination",
+      fromUrl: "from",
+      profileId: "profile",
+      query: "query",
+      sourceUrl: "source",
+      filename: "file",
+      destination: "save to",
+      localPaths: "local file",
+      siteTarget: "website",
+    };
+    return Object.entries(value)
+      .filter(([, item]) => item !== null && item !== undefined && item !== "")
+      .map(([key, item]) => {
+        const rendered = Array.isArray(item) ? item.join(", ") : String(item);
+        return `${labels[key] ?? key}: ${rendered}`;
+      });
+  } catch {
+    return [detail];
+  }
 }

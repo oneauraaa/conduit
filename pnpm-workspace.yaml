@@ -1,2 +1,5 @@
 minimumReleaseAgeExclude:
   - lucide-react@1.30.0
+
+packages:
+  - browser-runtime

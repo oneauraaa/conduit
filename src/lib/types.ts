@@ -17,7 +17,21 @@ export type AccessMode = "manual" | "auto" | "full";
 /** Master gate over the whole tool catalog. Only the Tools tab may change it. */
 export type ToolsAccess = "all" | "custom" | "off";
 
-export type ToolGroup = "vision" | "input" | "windows" | "accessibility" | "system";
+export type ToolGroup = "vision" | "input" | "windows" | "accessibility" | "system" | "browser";
+
+export type BrowserPermissionMode = "alwaysAllow" | "alwaysAsk";
+export type BrowserPermissionCategory =
+  | "openWebsites"
+  | "readHistory"
+  | "downloadFiles"
+  | "uploadFiles";
+
+export interface BrowserPermissions {
+  openWebsites: BrowserPermissionMode;
+  readHistory: BrowserPermissionMode;
+  downloadFiles: BrowserPermissionMode;
+  uploadFiles: BrowserPermissionMode;
+}
 
 export interface ToolDef {
   name: string;
@@ -50,6 +64,84 @@ export interface Settings {
   startOnLogin: boolean;
   /** When launched at login, go to the tray instead of showing the window. */
   startHidden: boolean;
+  browserPermissions: BrowserPermissions;
+}
+
+export type BrowserInstallStatus =
+  | "unavailable"
+  | "downloading"
+  | "verifying"
+  | "installing"
+  | "ready"
+  | "error";
+export type BrowserRunStatus =
+  | "stopped"
+  | "starting"
+  | "running"
+  | "stopping"
+  | "paused"
+  | "crashed";
+export type BrowserMode = "headless" | "visible";
+export type BrowserRestartStrategy = "fresh" | "reopenUrls";
+
+export interface BrowserInstallState {
+  status: BrowserInstallStatus;
+  expectedRevision: string;
+  installedRevision: string | null;
+  downloadedBytes: number;
+  totalBytes: number | null;
+  error: string | null;
+}
+
+export interface BrowserProfile {
+  id: string;
+  name: string;
+  incognito: boolean;
+}
+
+export interface BrowserTabState {
+  index: number;
+  title: string;
+  url: string;
+  active: boolean;
+}
+
+export interface BrowserDownload {
+  id: string;
+  filename: string;
+  sourceUrl: string;
+  path: string | null;
+  status: string;
+  error: string | null;
+}
+
+export interface BrowserPreviewFrame {
+  data: string;
+  mimeType: string;
+  width: number;
+  height: number;
+  at: number;
+}
+
+export interface BrowserHistoryEntry {
+  id: string;
+  profileId: string;
+  url: string;
+  title: string;
+  visitedAt: number;
+}
+
+export interface BrowserState {
+  install: BrowserInstallState;
+  runStatus: BrowserRunStatus;
+  mode: BrowserMode;
+  selectedProfileId: string;
+  profiles: BrowserProfile[];
+  tabs: BrowserTabState[];
+  downloads: BrowserDownload[];
+  preview: BrowserPreviewFrame | null;
+  stopLatched: boolean;
+  owner: string | null;
 }
 
 export interface TailscaleState {
@@ -233,6 +325,7 @@ export interface PendingApproval {
   summary: string;
   detail: string | null;
   agent: string | null;
+  category: BrowserPermissionCategory | null;
 }
 
 export interface AgentTarget {

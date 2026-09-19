@@ -1,487 +1,8 @@
 [
   {
-    "name": "screenshot",
-    "group": "vision",
-    "risky": false,
-    "description": "Capture the screen as a PNG. Prefer read_screen_text when you only need text or control positions; use this for layout, images, or visual confirmation.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "display": {
-          "type": "integer",
-          "description": "Display index; defaults to the primary display.",
-          "minimum": 0
-        },
-        "region": {
-          "type": "array",
-          "items": {
-            "type": "number"
-          },
-          "minItems": 4,
-          "maxItems": 4,
-          "description": "Optional [x, y, width, height] crop in display coordinates."
-        },
-        "scale": {
-          "type": "number",
-          "minimum": 0.1,
-          "maximum": 1,
-          "description": "Optional capture scale from 0.1 to 1.0."
-        }
-      },
-      "required": []
-    }
-  },
-  {
-    "name": "list_displays",
-    "group": "vision",
-    "risky": false,
-    "description": "List attached displays with bounds in the shared top-left coordinate space.",
-    "parameters": {
-      "type": "object",
-      "properties": {},
-      "required": []
-    }
-  },
-  {
-    "name": "move_cursor",
-    "group": "input",
-    "risky": false,
-    "description": "Move the cursor to a point with a natural glide.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "x": {
-          "type": "number"
-        },
-        "y": {
-          "type": "number"
-        }
-      },
-      "required": [
-        "x",
-        "y"
-      ]
-    }
-  },
-  {
-    "name": "click",
-    "group": "input",
-    "risky": false,
-    "description": "Click at an optional point; count 2 gives a real double-click.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "x": {
-          "type": "number"
-        },
-        "y": {
-          "type": "number"
-        },
-        "button": {
-          "type": "string",
-          "enum": [
-            "left",
-            "right",
-            "middle"
-          ]
-        },
-        "count": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 3
-        }
-      },
-      "required": []
-    }
-  },
-  {
-    "name": "drag",
-    "group": "input",
-    "risky": false,
-    "description": "Press, move, and release for sliders, resize handles, and drag-and-drop.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "from_x": {
-          "type": "number"
-        },
-        "from_y": {
-          "type": "number"
-        },
-        "to_x": {
-          "type": "number"
-        },
-        "to_y": {
-          "type": "number"
-        },
-        "button": {
-          "type": "string",
-          "enum": [
-            "left",
-            "right",
-            "middle"
-          ]
-        }
-      },
-      "required": [
-        "to_x",
-        "to_y"
-      ]
-    }
-  },
-  {
-    "name": "scroll",
-    "group": "input",
-    "risky": false,
-    "description": "Scroll the surface under the cursor; positive dy scrolls up.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "dx": {
-          "type": "integer"
-        },
-        "dy": {
-          "type": "integer"
-        },
-        "x": {
-          "type": "number"
-        },
-        "y": {
-          "type": "number"
-        }
-      },
-      "required": []
-    }
-  },
-  {
-    "name": "type_text",
-    "group": "input",
-    "risky": false,
-    "description": "Type literal, layout-independent text into the focused control.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "text": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "text"
-      ]
-    }
-  },
-  {
-    "name": "key_press",
-    "group": "input",
-    "risky": false,
-    "description": "Press a key with optional modifiers. cmd means Command on macOS and Control on Linux/Windows; win/super means the logo key.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "key": {
-          "type": "string"
-        },
-        "modifiers": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        }
-      },
-      "required": [
-        "key"
-      ]
-    }
-  },
-  {
-    "name": "get_cursor_position",
-    "group": "input",
-    "risky": false,
-    "description": "Read the current cursor position.",
-    "parameters": {
-      "type": "object",
-      "properties": {},
-      "required": []
-    }
-  },
-  {
-    "name": "list_windows",
-    "group": "windows",
-    "risky": false,
-    "description": "List on-screen windows with titles, owning apps, bounds, and frontmost order.",
-    "parameters": {
-      "type": "object",
-      "properties": {},
-      "required": []
-    }
-  },
-  {
-    "name": "focus_window",
-    "group": "windows",
-    "risky": false,
-    "description": "Bring a window to the front by its window_id from list_windows.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "window_id": {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 4294967295,
-          "description": "Use the id from a preceding list_windows result."
-        }
-      },
-      "required": [
-        "window_id"
-      ]
-    }
-  },
-  {
-    "name": "set_window_bounds",
-    "group": "windows",
-    "risky": false,
-    "description": "Move and resize a window.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "window_id": {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 4294967295,
-          "description": "Use the id from a preceding list_windows result."
-        },
-        "x": {
-          "type": "number"
-        },
-        "y": {
-          "type": "number"
-        },
-        "width": {
-          "type": "number"
-        },
-        "height": {
-          "type": "number"
-        }
-      },
-      "required": [
-        "window_id",
-        "x",
-        "y",
-        "width",
-        "height"
-      ]
-    }
-  },
-  {
-    "name": "list_apps",
-    "group": "windows",
-    "risky": false,
-    "description": "List running applications.",
-    "parameters": {
-      "type": "object",
-      "properties": {},
-      "required": []
-    }
-  },
-  {
-    "name": "open_app",
-    "group": "windows",
-    "risky": false,
-    "description": "Launch an application or bring it forward if already running.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "name": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "name"
-      ]
-    }
-  },
-  {
-    "name": "quit_app",
-    "group": "windows",
-    "risky": true,
-    "description": "Ask an application to quit; it may prompt about unsaved work.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "name": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "name"
-      ]
-    }
-  },
-  {
-    "name": "read_screen_text",
-    "group": "accessibility",
-    "risky": false,
-    "description": "Read exact text and control bounds from accessibility. Elements include text, centerX and centerY; prefer this over screenshots for locating controls.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "app": {
-          "type": "string",
-          "description": "Optional app name; defaults to the frontmost app."
-        }
-      },
-      "required": []
-    }
-  },
-  {
-    "name": "find_element",
-    "group": "accessibility",
-    "risky": false,
-    "description": "Find controls by text, case-insensitively; returns ranked elements with text and centerX/centerY ready for click.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "query": {
-          "type": "string"
-        },
-        "app": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "query"
-      ]
-    }
-  },
-  {
-    "name": "web_search",
-    "group": "system",
-    "risky": false,
-    "description": "Search the web with DuckDuckGo and return result links and snippets.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "query": {
-          "type": "string"
-        },
-        "max_results": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 10
-        }
-      },
-      "required": [
-        "query"
-      ]
-    }
-  },
-  {
-    "name": "clipboard_read",
-    "group": "system",
-    "risky": false,
-    "description": "Read the clipboard's text.",
-    "parameters": {
-      "type": "object",
-      "properties": {},
-      "required": []
-    }
-  },
-  {
-    "name": "clipboard_write",
-    "group": "system",
-    "risky": true,
-    "description": "Replace the clipboard's contents, destroying the text currently copied.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "text": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "text"
-      ]
-    }
-  },
-  {
-    "name": "run_shell",
-    "group": "system",
-    "risky": true,
-    "description": "Run a command and capture output. The host handshake identifies the shell: zsh on macOS, PowerShell on Windows, login shell on Linux.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "command": {
-          "type": "string"
-        },
-        "timeout_seconds": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 300
-        }
-      },
-      "required": [
-        "command"
-      ]
-    }
-  },
-  {
-    "name": "wait",
-    "group": "system",
-    "risky": false,
-    "description": "Pause to let an animation finish or a window appear.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "milliseconds": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 30000,
-          "description": "Pause duration in milliseconds."
-        }
-      },
-      "required": [
-        "milliseconds"
-      ]
-    }
-  },
-  {
-    "name": "notify",
-    "group": "system",
-    "risky": false,
-    "description": "Post a desktop notification.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "title": {
-          "type": "string"
-        },
-        "body": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "title",
-        "body"
-      ]
-    }
-  },
-  {
-    "name": "list_keybinds",
-    "group": "system",
-    "risky": false,
-    "description": "Read published user shortcuts before using modifier combinations. Reports when this desktop cannot provide the list.",
-    "parameters": {
-      "type": "object",
-      "properties": {},
-      "required": []
-    }
-  },
-  {
     "name": "browser_click",
-    "group": "browser",
-    "risky": false,
     "description": "Perform click on a web page",
-    "parameters": {
+    "inputSchema": {
       "type": "object",
       "properties": {
         "element": {
@@ -525,26 +46,34 @@
       ],
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false
+    },
+    "annotations": {
+      "title": "Click",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
     }
   },
   {
     "name": "browser_close",
-    "group": "browser",
-    "risky": true,
     "description": "Close the page",
-    "parameters": {
+    "inputSchema": {
       "type": "object",
       "properties": {},
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false
+    },
+    "annotations": {
+      "title": "Close browser",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
     }
   },
   {
     "name": "browser_drag",
-    "group": "browser",
-    "risky": false,
     "description": "Perform drag and drop between two elements",
-    "parameters": {
+    "inputSchema": {
       "type": "object",
       "properties": {
         "startElement": {
@@ -570,14 +99,18 @@
       ],
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false
+    },
+    "annotations": {
+      "title": "Drag mouse",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
     }
   },
   {
     "name": "browser_drop",
-    "group": "browser",
-    "risky": false,
     "description": "Drop files or MIME-typed data onto an element, as if dragged from outside the page. At least one of \"paths\" or \"data\" must be provided.",
-    "parameters": {
+    "inputSchema": {
       "type": "object",
       "properties": {
         "element": {
@@ -611,14 +144,18 @@
       ],
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false
+    },
+    "annotations": {
+      "title": "Drop files or data onto an element",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
     }
   },
   {
     "name": "browser_file_upload",
-    "group": "browser",
-    "risky": false,
     "description": "Upload one or multiple files",
-    "parameters": {
+    "inputSchema": {
       "type": "object",
       "properties": {
         "paths": {
@@ -631,14 +168,18 @@
       },
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false
+    },
+    "annotations": {
+      "title": "Upload files",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
     }
   },
   {
     "name": "browser_fill_form",
-    "group": "browser",
-    "risky": false,
     "description": "Fill multiple form fields",
-    "parameters": {
+    "inputSchema": {
       "type": "object",
       "properties": {
         "fields": {
@@ -690,14 +231,18 @@
       ],
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false
+    },
+    "annotations": {
+      "title": "Fill form",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
     }
   },
   {
     "name": "browser_find",
-    "group": "browser",
-    "risky": false,
     "description": "Search the accessibility snapshot of the current page for text or a regular expression. Returns matching snapshot nodes with a few lines of surrounding context (like search snippets), each shown under its path from the root of the tree, which is cheaper than capturing the whole snapshot when you only need to locate an element and its ref.",
-    "parameters": {
+    "inputSchema": {
       "type": "object",
       "properties": {
         "text": {
@@ -711,14 +256,18 @@
       },
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false
+    },
+    "annotations": {
+      "title": "Find in page snapshot",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
     }
   },
   {
     "name": "browser_handle_dialog",
-    "group": "browser",
-    "risky": false,
     "description": "Handle a dialog",
-    "parameters": {
+    "inputSchema": {
       "type": "object",
       "properties": {
         "accept": {
@@ -735,41 +284,18 @@
       ],
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false
-    }
-  },
-  {
-    "name": "browser_history",
-    "group": "browser",
-    "risky": false,
-    "description": "Search the selected Conduit browser profile's full navigation history, newest first.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "query": {
-          "type": "string",
-          "description": "Optional case-insensitive text to match against the URL or page title."
-        },
-        "before": {
-          "type": "string",
-          "description": "Opaque continuation cursor returned by an earlier browser_history call."
-        },
-        "limit": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 200,
-          "default": 50,
-          "description": "Maximum entries to return."
-        }
-      },
-      "additionalProperties": false
+    },
+    "annotations": {
+      "title": "Handle a dialog",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
     }
   },
   {
     "name": "browser_hover",
-    "group": "browser",
-    "risky": false,
     "description": "Hover over element on page",
-    "parameters": {
+    "inputSchema": {
       "type": "object",
       "properties": {
         "element": {
@@ -786,14 +312,18 @@
       ],
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false
+    },
+    "annotations": {
+      "title": "Hover mouse",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
     }
   },
   {
     "name": "browser_navigate",
-    "group": "browser",
-    "risky": false,
     "description": "Navigate to a URL",
-    "parameters": {
+    "inputSchema": {
       "type": "object",
       "properties": {
         "url": {
@@ -806,26 +336,34 @@
       ],
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false
+    },
+    "annotations": {
+      "title": "Navigate to a URL",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
     }
   },
   {
     "name": "browser_navigate_back",
-    "group": "browser",
-    "risky": false,
     "description": "Go back to the previous page in the history",
-    "parameters": {
+    "inputSchema": {
       "type": "object",
       "properties": {},
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false
+    },
+    "annotations": {
+      "title": "Go back",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
     }
   },
   {
     "name": "browser_press_key",
-    "group": "browser",
-    "risky": false,
     "description": "Press a key on the keyboard",
-    "parameters": {
+    "inputSchema": {
       "type": "object",
       "properties": {
         "key": {
@@ -838,14 +376,18 @@
       ],
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false
+    },
+    "annotations": {
+      "title": "Press a key",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
     }
   },
   {
     "name": "browser_resize",
-    "group": "browser",
-    "risky": false,
     "description": "Resize the browser window",
-    "parameters": {
+    "inputSchema": {
       "type": "object",
       "properties": {
         "width": {
@@ -863,14 +405,18 @@
       ],
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false
+    },
+    "annotations": {
+      "title": "Resize browser window",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
     }
   },
   {
     "name": "browser_select_option",
-    "group": "browser",
-    "risky": false,
     "description": "Select an option in a dropdown",
-    "parameters": {
+    "inputSchema": {
       "type": "object",
       "properties": {
         "element": {
@@ -895,14 +441,18 @@
       ],
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false
+    },
+    "annotations": {
+      "title": "Select option",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
     }
   },
   {
     "name": "browser_snapshot",
-    "group": "browser",
-    "risky": false,
     "description": "Capture accessibility snapshot of the current page, this is better than screenshot",
-    "parameters": {
+    "inputSchema": {
       "type": "object",
       "properties": {
         "target": {
@@ -924,14 +474,18 @@
       },
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false
+    },
+    "annotations": {
+      "title": "Page snapshot",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
     }
   },
   {
     "name": "browser_tabs",
-    "group": "browser",
-    "risky": false,
     "description": "List, create, close, or select a browser tab.",
-    "parameters": {
+    "inputSchema": {
       "type": "object",
       "properties": {
         "action": {
@@ -958,14 +512,18 @@
       ],
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false
+    },
+    "annotations": {
+      "title": "Manage tabs",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
     }
   },
   {
     "name": "browser_take_screenshot",
-    "group": "browser",
-    "risky": false,
     "description": "Take a screenshot of the current page. You can't perform actions based on the screenshot, use browser_snapshot for actions.",
-    "parameters": {
+    "inputSchema": {
       "type": "object",
       "properties": {
         "element": {
@@ -1008,14 +566,18 @@
       ],
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false
+    },
+    "annotations": {
+      "title": "Take a screenshot",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
     }
   },
   {
     "name": "browser_type",
-    "group": "browser",
-    "risky": false,
     "description": "Type text into editable element",
-    "parameters": {
+    "inputSchema": {
       "type": "object",
       "properties": {
         "element": {
@@ -1045,14 +607,18 @@
       ],
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false
+    },
+    "annotations": {
+      "title": "Type text",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
     }
   },
   {
     "name": "browser_wait_for",
-    "group": "browser",
-    "risky": false,
     "description": "Wait for text to appear or disappear or a specified time to pass",
-    "parameters": {
+    "inputSchema": {
       "type": "object",
       "properties": {
         "time": {
@@ -1070,6 +636,12 @@
       },
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false
+    },
+    "annotations": {
+      "title": "Wait for",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
     }
   }
 ]

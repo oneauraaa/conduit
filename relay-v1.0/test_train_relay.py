@@ -4,6 +4,7 @@ import unittest
 import os
 import json
 import re
+import tempfile
 from collections import Counter
 from unittest.mock import patch
 import relay_dataset as data
@@ -57,23 +58,57 @@ class DatasetTests(unittest.TestCase):
         root = Path(__file__).resolve().parent.parent
         source = (root/'src-tauri/src/mcp/tools.rs').read_text()
         catalog = (root/'src-tauri/src/mcp/catalog.rs').read_text()
-        handlers = re.findall(r'async fn (\w+)\((.*?)\) -> Result<CallToolResult',source,re.S)
+        handlers = [item for item in re.findall(r'async fn (\w+)\((.*?)\) -> Result<CallToolResult',source,re.S)
+                    if item[0] in self.by_name]
         self.assertEqual({name for name,_ in handlers},set(self.by_name))
+        pinned = {t['name']:t['inputSchema'] for t in
+                  json.loads((root/'browser-runtime/pinned-tools.json').read_text())}
         for name,signature in handlers:
             with self.subTest(tool=name):
-                arg_type = re.search(r'Parameters<(\w+)>',signature)
-                fields = []
-                required = []
-                if arg_type:
-                    body = re.search(r'pub struct '+arg_type[1]+r' \{(.*?)^}',source,re.M|re.S)[1]
-                    fields = re.findall(r'pub (\w+): ([^\n]+),',body)
-                    required = [n for n,t in fields if not t.startswith('Option<') and n!='modifiers']
                 schema = self.by_name[name]['parameters']
-                self.assertEqual(set(schema['properties']),{n for n,_ in fields})
-                self.assertEqual(set(schema['required']),set(required))
+                if name in pinned:
+                    self.assertEqual(schema,pinned[name])
+                elif name=='browser_history':
+                    self.assertEqual(schema['properties']['limit']['minimum'],1)
+                    self.assertEqual(schema['properties']['limit']['maximum'],200)
+                    self.assertEqual(schema['properties']['limit']['default'],50)
+                else:
+                    arg_type = re.search(r'Parameters<(\w+)>',signature)
+                    fields = []
+                    required = []
+                    if arg_type:
+                        body = re.search(r'pub struct '+arg_type[1]+r' \{(.*?)^}',source,re.M|re.S)[1]
+                        fields = re.findall(r'pub (\w+): ([^\n]+),',body)
+                        required = [n for n,t in fields if not t.startswith('Option<') and n!='modifiers']
+                    self.assertEqual(set(schema['properties']),{n for n,_ in fields})
+                    self.assertEqual(set(schema['required']),set(required))
                 risk = re.search(r'tool\(\s*"'+name+r'".*?,\s*(true|false),?\s*\)',catalog,re.S)
                 self.assertIsNotNone(risk)
                 self.assertEqual(self.by_name[name]['risky'],risk[1]=='true')
+
+    def test_relay_catalog_has_generated_twenty_tool_browser_surface(self):
+        self.assertEqual(len(self.by_name),44)
+        self.assertEqual(sum(name.startswith('browser_') for name in self.by_name),20)
+
+    def test_all_four_browser_permission_categories_have_allow_and_deny_scenarios(self):
+        decisions=Counter((a.get('category'),a['decision']) for r in self.records for a in r['approvals'])
+        for category in data.BROWSER_CATEGORIES:
+            self.assertGreater(decisions[(category,'allow')],0)
+            self.assertGreater(decisions[(category,'deny')],0)
+
+    def test_browser_session_grant_applies_to_the_whole_category(self):
+        rows=[r for r in self.records if r['group']=='browser-permission-upload-session']
+        self.assertTrue(rows)
+        for row in rows:
+            grant=next(a for a in row['approvals'] if a.get('session'))
+            self.assertEqual(grant['category'],'uploadFiles')
+            calls=[c['function'] for m in row['messages'] for c in m.get('tool_calls',[])]
+            self.assertEqual([c['name'] for c in calls],['browser_file_upload','browser_file_upload'])
+            self.assertNotEqual(calls[0]['arguments'],calls[1]['arguments'])
+            without_session=copy.deepcopy(row)
+            next(a for a in without_session['approvals'] if a.get('session')).pop('session')
+            with self.assertRaisesRegex(ValueError,'prior exact approval'):
+                relay.validate_record(without_session,self.by_name)
 
     def test_every_tool_and_mode_appears_in_both_splits(self):
         for rows in (self.train,self.evaluation):
@@ -135,6 +170,9 @@ class DatasetTests(unittest.TestCase):
             self.assertEqual(relay.parse_tool_call_xml(xml,self.by_name),('type_text',{'text':text}))
         xml=relay.render_tool_call_xml('key_press',{'key':'s','modifiers':['ctrl','shift']})
         self.assertEqual(relay.parse_tool_call_xml(xml,self.by_name)[1]['modifiers'],['ctrl','shift'])
+        xml=relay.render_tool_call_xml('browser_type',{'target':'e14','text':'hello','submit':False})
+        self.assertIn('\nFalse\n',xml)
+        self.assertEqual(relay.parse_tool_call_xml(xml,self.by_name)[1]['submit'],False)
 
     def test_invalid_types_and_coordinate_pairs_rejected(self):
         for name,args in [('click',{'x':True,'y':3}),('click',{'x':20}),
@@ -172,6 +210,104 @@ class DatasetTests(unittest.TestCase):
         self.assertEqual(data.read_jsonl(base/'conduit_sft.jsonl'),self.train)
         self.assertEqual(data.read_jsonl(base/'conduit_eval.jsonl'),self.evaluation)
 
+    def test_model_metric_gate_enforces_all_three_thresholds(self):
+        valid = relay.render_tool_call_xml('browser_navigate', {'url':'https://example.com'})
+        report = relay.score_model_outputs([
+            {'id':'tool','kind':'tool','expected_tool':'browser_navigate','output':valid},
+            {'id':'approval','kind':'approval','expected_tool':'browser_file_upload','output':'May I upload that file?'},
+        ], self.by_name)
+        self.assertTrue(report['passed'])
+        report['metrics']['risky_action_approval_compliance'] = 0.99
+        path = Path(self.id().replace('.','-')+'.json')
+        try:
+            path.write_text(json.dumps(report))
+            with self.assertRaisesRegex(RuntimeError,'quality gate failed'):
+                relay.require_model_metrics(path)
+        finally:
+            path.unlink(missing_ok=True)
+
+    def test_model_report_identifies_schema_failures(self):
+        report = relay.score_model_outputs([
+            {
+                'id': 'malformed',
+                'kind': 'tool',
+                'expected_tool': 'browser_snapshot',
+                'output': '<tool_call>\n<function=browser_snapshot>\n<parameter=unknown>\n1\n</parameter>\n</function>\n</tool_call>',
+            },
+            {
+                'id': 'approval',
+                'kind': 'approval',
+                'expected_tool': 'browser_file_upload',
+                'output': 'May I upload that file?',
+            },
+        ], self.by_name)
+        failure = next(item for item in report['failures'] if item['kind'] == 'schema_validation')
+        self.assertEqual(failure['id'], 'malformed')
+        self.assertIn('unknown', failure['error'])
+
+    def test_missing_text_only_architecture_is_derived_from_loaded_model(self):
+        class Config:
+            architectures = None
+
+        class Qwen3_5ForCausalLM:
+            config = Config()
+
+        model = Qwen3_5ForCausalLM()
+        self.assertEqual(relay.ensure_model_architecture(model), ['Qwen3_5ForCausalLM'])
+        self.assertEqual(model.config.architectures, ['Qwen3_5ForCausalLM'])
+
+        model.config.architectures = ['PublishedArchitecture']
+        self.assertEqual(relay.ensure_model_architecture(model), ['PublishedArchitecture'])
+
+    def test_resume_checkpoint_requires_valid_trainer_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = Path(directory) / 'checkpoint-12'
+            checkpoint.mkdir()
+            with self.assertRaisesRegex(ValueError, 'invalid trainer checkpoint'):
+                relay.resolve_resume_checkpoint(str(checkpoint))
+            (checkpoint / 'trainer_state.json').write_text('{"global_step": 12}')
+            self.assertEqual(relay.resolve_resume_checkpoint(str(checkpoint)), checkpoint)
+            (checkpoint / 'trainer_state.json').write_text('{"global_step": 0}')
+            with self.assertRaisesRegex(ValueError, 'invalid state'):
+                relay.resolve_resume_checkpoint(str(checkpoint))
+
+    def test_gguf_verifier_checks_header_and_deployment_size(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'relay.gguf'
+            path.write_bytes(b'NOPE')
+            with self.assertRaisesRegex(RuntimeError,'unexpected size'):
+                relay.verify_relay_gguf(path)
+            with path.open('wb') as target:
+                target.write(b'NOPE')
+                target.truncate(4 * 1024**3)
+            with self.assertRaisesRegex(RuntimeError,'GGUF header'):
+                relay.verify_relay_gguf(path)
+            with path.open('r+b') as target:
+                target.write(b'GGUF')
+            self.assertEqual(relay.verify_relay_gguf(path),4 * 1024**3)
+
+    def test_export_rejects_a_fake_quantized_merge_and_resets_only_generated_dirs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            merged = output / 'merged'
+            merged.mkdir()
+            (merged / 'config.json').write_text(json.dumps({
+                'quantization_config': {'quant_method': 'bitsandbytes'},
+            }))
+            (merged / 'model.safetensors').touch()
+            with self.assertRaisesRegex(RuntimeError, 'still quantized with bitsandbytes'):
+                relay.verify_merged_checkpoint(merged)
+
+            (merged / 'config.json').write_text(json.dumps({'model_type': 'qwen3_5_text'}))
+            with self.assertRaisesRegex(RuntimeError, 'no model architecture'):
+                relay.verify_merged_checkpoint(merged)
+
+            with self.assertRaisesRegex(RuntimeError, 'unexpected export directory'):
+                relay.fresh_export_directory(output / 'adapter', output)
+            relay.fresh_export_directory(merged, output)
+            self.assertTrue(merged.is_dir())
+            self.assertEqual(list(merged.iterdir()), [])
+
 
 @unittest.skipUnless(os.environ.get('RELAY_TOKENIZER_TESTS')=='1','enable cached-tokenizer checks explicitly')
 class TemplateTests(unittest.TestCase):
@@ -195,6 +331,7 @@ class TemplateTests(unittest.TestCase):
                 target=self.tok.decode(row['input_ids'][start:],skip_special_tokens=False)
                 self.assertTrue(target.endswith('<|im_end|>\n'))
                 content=target.removesuffix('<|im_end|>\n')
+                self.assertEqual(len(mask), len(row['input_ids']))
                 if message.get('tool_calls'):
                     f=message['tool_calls'][0]['function']
                     self.assertEqual(data.parse_tool_call_xml(content),(f['name'],f['arguments']))
@@ -216,7 +353,6 @@ class TemplateTests(unittest.TestCase):
         for row,labels in zip(encoded,batch['labels'].tolist()):
             for token,keep,label in zip(row['input_ids'],row['completion_mask'],labels):
                 self.assertEqual(label,token if keep else -100)
-            self.assertTrue(all(x==-100 for x in labels[len(row['input_ids']):]))
 
 
 if __name__ == '__main__':

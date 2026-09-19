@@ -4,6 +4,11 @@ import * as standalone from "./standalone";
 import type {
   AccessMode,
   AgentTarget,
+  BrowserPermissionCategory,
+  BrowserPermissionMode,
+  BrowserMode,
+  BrowserRestartStrategy,
+  BrowserState,
   ControlState,
   CursorEvent,
   HyprlandState,
@@ -30,10 +35,63 @@ const local: Record<string, (args: Record<string, unknown>) => unknown> = {
   restart_server: () => standalone.server,
   set_port: (a) => ({ ...standalone.server, port: a.port }),
   get_settings: () => standalone.settings,
-  get_tool_catalog: () => standalone.catalog,
+  get_tool_catalog: () =>
+    standalone.browser.install.status === "ready"
+      ? [...standalone.catalog, ...standalone.browserCatalog]
+      : standalone.catalog,
   set_default_access: (a) => ({ ...standalone.settings, defaultAccess: a.mode }),
   set_tools_access: (a) => ({ ...standalone.settings, toolsAccess: a.access }),
   set_tool_enabled: () => standalone.settings,
+  get_browser_state: () => ({ ...standalone.browser }),
+  refresh_browser_install: () => ({ ...standalone.browser }),
+  install_browser: () => {
+    standalone.browser.install.status = "ready";
+    standalone.browser.install.installedRevision = standalone.browser.install.expectedRevision;
+    standalone.browser.install.downloadedBytes = standalone.browser.install.totalBytes ?? 0;
+    standalone.browser.install.error = null;
+    return { ...standalone.browser };
+  },
+  cancel_browser_install: () => undefined,
+  start_browser: () => {
+    standalone.browser.runStatus = "running";
+    standalone.browser.stopLatched = false;
+    return { ...standalone.browser };
+  },
+  stop_browser: () => {
+    standalone.browser.runStatus = "stopped";
+    standalone.browser.stopLatched = true;
+    standalone.browser.tabs = [];
+    return { ...standalone.browser };
+  },
+  set_browser_mode: (a) => {
+    standalone.browser.mode = a.mode as BrowserMode;
+    return { ...standalone.browser };
+  },
+  select_browser_profile: (a) => {
+    standalone.browser.selectedProfileId = a.profileId as string;
+    return { ...standalone.browser };
+  },
+  create_browser_profile: (a) => {
+    const profile = { id: `profile-${Date.now()}`, name: a.name as string, incognito: false };
+    standalone.browser.profiles.splice(-1, 0, profile);
+    return { ...standalone.browser };
+  },
+  rename_browser_profile: (a) => {
+    const profile = standalone.browser.profiles.find((item) => item.id === a.id);
+    if (profile) profile.name = a.name as string;
+    return { ...standalone.browser };
+  },
+  delete_browser_profile: (a) => {
+    standalone.browser.profiles = standalone.browser.profiles.filter((item) => item.id !== a.id);
+    return { ...standalone.browser };
+  },
+  set_browser_permission: (a) => {
+    standalone.settings.browserPermissions[a.category as BrowserPermissionCategory] =
+      a.mode as BrowserPermissionMode;
+    return { ...standalone.settings };
+  },
+  set_browser_tab_visible: () => undefined,
+  open_browser_downloads: () => undefined,
   // These two mutate the sample object rather than returning a one-off spread.
   // The browser access panel is the one place in the UI whose state
   // accumulates — switch it on, then add an address — and a stateless stub
@@ -101,6 +159,34 @@ export const setToolsAccess = (access: ToolsAccess) =>
   invoke<Settings>("set_tools_access", { access });
 export const setToolEnabled = (tool: string, enabled: boolean) =>
   invoke<Settings>("set_tool_enabled", { tool, enabled });
+
+/* ── built-in Chromium browser ─────────────────────────────── */
+
+export const getBrowserState = () => invoke<BrowserState>("get_browser_state");
+export const refreshBrowserInstall = () => invoke<BrowserState>("refresh_browser_install");
+export const installBrowser = () => invoke<BrowserState>("install_browser");
+export const cancelBrowserInstall = () => invoke<void>("cancel_browser_install");
+export const startBrowser = () => invoke<BrowserState>("start_browser");
+export const stopBrowser = () => invoke<BrowserState>("stop_browser");
+export const setBrowserMode = (mode: BrowserMode, restart?: BrowserRestartStrategy) =>
+  invoke<BrowserState>("set_browser_mode", { mode, restart });
+export const selectBrowserProfile = (
+  profileId: string,
+  restart?: BrowserRestartStrategy,
+) => invoke<BrowserState>("select_browser_profile", { profileId, restart });
+export const createBrowserProfile = (name: string) =>
+  invoke<BrowserState>("create_browser_profile", { name });
+export const renameBrowserProfile = (id: string, name: string) =>
+  invoke<BrowserState>("rename_browser_profile", { id, name });
+export const deleteBrowserProfile = (id: string) =>
+  invoke<BrowserState>("delete_browser_profile", { id });
+export const setBrowserPermission = (
+  category: BrowserPermissionCategory,
+  mode: BrowserPermissionMode,
+) => invoke<Settings>("set_browser_permission", { category, mode });
+export const setBrowserTabVisible = (visible: boolean) =>
+  invoke<void>("set_browser_tab_visible", { visible });
+export const openBrowserDownloads = () => invoke<void>("open_browser_downloads");
 
 /* ── browser access ─────────────────────────────────────────── */
 
@@ -173,6 +259,7 @@ type EventMap = {
   "control:cursor": CursorEvent;
   "control:pulse": PulseEvent;
   "control:approval": PendingApproval | null;
+  "browser:state": BrowserState;
   "agents:changed": AgentTarget[];
   "tailscale:state": TailscaleState;
 };

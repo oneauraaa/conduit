@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { Sidebar, type Tab } from "@/components/Sidebar";
 import { TitleBar } from "@/components/TitleBar";
 import { ServerTab } from "@/tabs/ServerTab";
+import { BrowserTab } from "@/tabs/BrowserTab";
 import { ToolsTab } from "@/tabs/ToolsTab";
 import { AgentsTab } from "@/tabs/AgentsTab";
 import { HyprlandTab } from "@/tabs/HyprlandTab";
@@ -28,6 +29,7 @@ function initialTab(): Tab {
   if (!isStandalone) return "server";
   const t = new URLSearchParams(window.location.search).get("tab");
   return t === "tools" ||
+    t === "browser" ||
     t === "agents" ||
     t === "hyprland" ||
     t === "tailscale" ||
@@ -74,6 +76,7 @@ export default function App() {
             className="h-full overflow-y-auto"
           >
             {tab === "server" && <ServerTab server={server} />}
+            {tab === "browser" && <BrowserTab />}
             {tab === "tools" && <ToolsTab />}
             {tab === "agents" && <AgentsTab server={server} />}
             {tab === "hyprland" && <HyprlandTab />}

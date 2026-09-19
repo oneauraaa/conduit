@@ -1,28 +1,35 @@
-// Builds conduit and puts it in a zip. No installer.
+// Builds the native release asset GitHub publishes for this host.
 //
-// Windows ships the bare executable: Tauri embeds the frontend and the app
-// manifest into it, so `conduit.exe` is the whole app. The one thing it does
-// not carry is the WebView2 runtime, which Windows 11 already has and which an
-// installer would otherwise fetch — see the README note.
+// Windows ships the bare executable. Tauri embeds the frontend and app manifest
+// into it; Windows 11 already supplies the separate WebView2 runtime.
 //
-// macOS ships `conduit.app`, zipped with `ditto` rather than `zip`. A .app is a
-// directory full of symlinks and extended attributes, and plain `zip` flattens
-// both, which breaks the bundle (and any signature on it).
+// Linux ships Tauri's AppImage rather than a host-linked bare ELF binary.
 //
-// Linux ships the bare ELF binary, like Windows. No .deb or AppImage: conduit
-// links against the WebKitGTK and GTK already on any desktop that can run a
-// browser, and its genuinely optional pieces (gtk-layer-shell) are dlopened at
-// runtime rather than linked, so there is nothing for a package manager to
-// resolve. `zip -j` because the binary must sit at the archive root.
+// macOS ships `conduit.app.zip`. A .app is a directory, so GitHub cannot attach
+// it directly. `ditto` preserves the bundle's symlinks and extended attributes.
 
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, rmSync, existsSync, statSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const version = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version;
 const outDir = join(root, "dist-release");
+const tag = process.env.CONDUIT_RELEASE_TAG?.trim() || `v${version}`;
+
+if (!/^v[0-9]+\.[0-9]+(?:\.[0-9]+)?(?:[-+][0-9A-Za-z.-]+)?$/.test(tag)) {
+  console.error(`CONDUIT_RELEASE_TAG is not a safe release tag: ${tag}`);
+  process.exit(1);
+}
 
 const isWindows = process.platform === "win32";
 const isMac = process.platform === "darwin";
@@ -52,12 +59,13 @@ mkdirSync(outDir, { recursive: true });
 
 /* ── build ── */
 
-if (isWindows || isLinux) {
+if (isWindows) {
   // --no-bundle: there is no bundler target we want. It still builds the
   // release binary and still runs beforeBuildCommand, so the frontend is fresh.
   run("pnpm", ["tauri", "build", "--no-bundle", ...extraArgs]);
+} else if (isLinux) {
+  run("pnpm", ["tauri", "build", "--bundles", "appimage", ...extraArgs]);
 } else {
-  // `app` is the .app bundle; dmg is deliberately not built.
   run("pnpm", ["tauri", "build", "--bundles", "app", ...extraArgs]);
 }
 
@@ -73,17 +81,25 @@ const releaseDir = triple
 const arch = triple ?? (process.arch === "arm64" ? "aarch64" : "x64");
 
 let payload;
-let zipName;
+let assetName;
 
 if (isWindows) {
   payload = join(releaseDir, "conduit.exe");
-  zipName = `conduit-${version}-windows-${arch}.zip`;
+  assetName = `conduit-${tag}-windows-${arch}.exe`;
 } else if (isLinux) {
-  payload = join(releaseDir, "conduit");
-  zipName = `conduit-${version}-linux-${arch}.zip`;
+  const appImageDir = join(releaseDir, "bundle", "appimage");
+  const candidates = existsSync(appImageDir)
+    ? readdirSync(appImageDir).filter((name) => name.endsWith(".AppImage"))
+    : [];
+  if (candidates.length !== 1) {
+    console.error(`expected one AppImage in ${appImageDir}, found ${candidates.length}`);
+    process.exit(1);
+  }
+  payload = join(appImageDir, candidates[0]);
+  assetName = `conduit-${tag}-linux-${arch}.AppImage`;
 } else {
   payload = join(releaseDir, "bundle", "macos", "conduit.app");
-  zipName = `conduit-${version}-macos-${arch}.zip`;
+  assetName = `conduit-${tag}-macos-universal.app.zip`;
 }
 
 if (!existsSync(payload)) {
@@ -91,26 +107,19 @@ if (!existsSync(payload)) {
   process.exit(1);
 }
 
-/* ── zip ── */
+/* ── stage the release asset ── */
 
-const zipPath = join(outDir, zipName);
-rmSync(zipPath, { force: true });
+const assetPath = join(outDir, assetName);
+rmSync(assetPath, { force: true });
 
 if (isWindows) {
-  // Compress-Archive is built in; no toolchain to install on a CI runner.
-  run("powershell", [
-    "-NoProfile",
-    "-Command",
-    `Compress-Archive -Path '${payload}' -DestinationPath '${zipPath}' -Force`,
-  ]);
+  copyFileSync(payload, assetPath);
 } else if (isLinux) {
-  // -j drops the directory names, so the binary lands at the archive root.
-  // Without it the zip carries the whole src-tauri/target/release path.
-  run("zip", ["-j", "-9", zipPath, payload]);
+  copyFileSync(payload, assetPath);
 } else {
   // --keepParent so the archive contains conduit.app rather than its innards.
-  run("ditto", ["-c", "-k", "--sequesterRsrc", "--keepParent", payload, zipPath]);
+  run("ditto", ["-c", "-k", "--sequesterRsrc", "--keepParent", payload, assetPath]);
 }
 
-const mb = (statSync(zipPath).size / 1024 / 1024).toFixed(1);
-console.log(`\n${zipName}  (${mb} MB)\n${zipPath}`);
+const mb = (statSync(assetPath).size / 1024 / 1024).toFixed(1);
+console.log(`\n${assetName}  (${mb} MB)\n${assetPath}`);

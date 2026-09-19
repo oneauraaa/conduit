@@ -14,7 +14,7 @@ Looking at the screen, moving a cursor, clicking, typing.
 
 ---
 
-conduit **is** the MCP server. It exposes 22 computer-use tools on localhost, so
+conduit **is** the MCP server. It exposes 24 computer-use tools on localhost, so
 any agent — Claude Code, Codex, Hermes, OpenClaw — can drive the machine, but
 only while conduit is running. Quit it from the tray and the endpoint dies with
 it. That is the security model, and it is why the window's `x` hides to the tray
@@ -28,13 +28,13 @@ anywhere.
 
 ## Install
 
-Grab the zip for your platform from [Releases](../../releases). No installer.
+Grab the native build for your platform from [Releases](../../releases). No installer.
 
-- **Windows** — unzip, run `conduit.exe`. Needs the WebView2 runtime, which
+- **Windows** — download and run the `.exe`. Needs the WebView2 runtime, which
   Windows 11 already has.
-- **macOS** — unzip, move `conduit.app` to Applications. Grant Accessibility and
+- **macOS** — unzip `conduit.app.zip`, move `conduit.app` to Applications. Grant Accessibility and
   Screen Recording when the Server tab asks.
-- **Linux** — unzip, `chmod +x conduit`, run it. Wayland only, and it needs
+- **Linux** — download the AppImage, run `chmod +x conduit-*.AppImage`, then open it. Wayland only, and it needs
   `xdg-desktop-portal` with the backend for your desktop
   (`xdg-desktop-portal-kde` on Plasma).
 
@@ -96,14 +96,46 @@ Browser clients are refused unless you name their origin in Settings — this
 endpoint has no authentication, so an open CORS header would let any page you
 visit drive the machine.
 
+## Built-in browser
+
+The Browser tab can install a separate, platform-specific Chromium bundle. The
+main Conduit download stays browser-free; until the required revision is
+installed, the tab shows only the download/update panel and agents continue to
+see the original 24 tools. A verified install adds 20 browser tools dynamically
+for a total of 44.
+
+Chromium defaults to headless mode with a view-only preview that streams only
+while the Browser tab is visible. Visible mode opens a normal Chromium window.
+Profiles keep cookies, sessions, and Conduit-recorded navigation history;
+Incognito data is removed whenever Chromium stops.
+
+Four Browser-tab policies override Manual/Auto/Full for their own boundaries:
+
+| browser permission | default |
+|---|---|
+| open websites | always allow |
+| read navigation history | always allow |
+| download files | always ask |
+| upload files | always ask |
+
+Tool switches, Panic Stop, URL restrictions, the Chromium sandbox, and runtime
+availability remain hard gates. Website downloads are approved before they are
+promoted into `Downloads/conduit/<profile-id>/`; uploads are approved before
+Conduit reads the local file.
+
+Desktop capture is also fully on demand. Conduit never pumps screenshots in the
+background: it opens the platform capture path only while an agent's
+`screenshot` call is running, then tears it down after the first frame.
+
 ## Develop
 
 ```bash
 pnpm install
 pnpm tauri dev                 # the app
 pnpm dev                       # the UI alone, in a browser, against sample data
-pnpm package                   # a release zip in dist-release/
+pnpm package                   # this platform's native release asset in dist-release/
 cd src-tauri && cargo test --lib
+pnpm --dir browser-runtime test # private sidecar + real Chromium fixtures
 ```
 
 `pnpm dev` takes `?platform=macos|windows|linux`, which is the only way to
@@ -125,7 +157,8 @@ they drift, and `mcp/tools.rs` contains no `#[cfg]` at all.
 src/                  React 19 · Tailwind v4 · Motion · Lucide
 src-tauri/src/
   mcp/gate.rs         the one permission choke point
-  mcp/tools.rs        the 22 tools
+  browser/            optional Chromium install, profiles, history and process lifecycle
+  mcp/tools.rs        the 24 desktop tools and 20 optional browser handlers
   platform/mac/       AppKit · Quartz · ScreenCaptureKit · AX
   platform/win/       Win32 · Windows.Graphics.Capture · UI Automation
   platform/linux/     xdg portals · PipeWire · KWin scripting · AT-SPI2

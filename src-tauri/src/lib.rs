@@ -1,4 +1,5 @@
 mod agents;
+mod browser;
 mod chrome;
 mod commands;
 mod hyprland;
@@ -109,6 +110,20 @@ pub fn run() {
             commands::set_default_access,
             commands::set_tools_access,
             commands::set_tool_enabled,
+            commands::get_browser_state,
+            commands::refresh_browser_install,
+            commands::install_browser,
+            commands::cancel_browser_install,
+            commands::start_browser,
+            commands::stop_browser,
+            commands::set_browser_mode,
+            commands::select_browser_profile,
+            commands::create_browser_profile,
+            commands::rename_browser_profile,
+            commands::delete_browser_profile,
+            commands::set_browser_permission,
+            commands::set_browser_tab_visible,
+            commands::open_browser_downloads,
             commands::set_cors_enabled,
             commands::set_cors_origins,
             commands::set_start_on_login,
