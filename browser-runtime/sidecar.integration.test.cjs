@@ -119,6 +119,21 @@ function containsFile(root, filename) {
   );
 }
 
+async function removeTreeWhenReleased(root) {
+  let lastError;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    try {
+      fs.rmSync(root, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      if (!["EBUSY", "EPERM", "ENOTEMPTY"].includes(error.code)) throw error;
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+  throw lastError;
+}
+
 test("private sidecar runs all nineteen pinned tools against a local fixture", {
   skip: !chromiumInstalled && "install Playwright Chromium to run the integration test",
   timeout: 120_000,
@@ -357,7 +372,10 @@ test("an active browser request fails when the sidecar crashes", {
       send({ type: "permissionResult", requestId: message.requestId, allowed: true });
     }
   });
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  // Windows can deliver the sidecar exit before Chromium has observed its
+  // closed Playwright pipe and released profile files. Retry for a bounded
+  // period; if the browser is actually orphaned, cleanup still fails.
+  t.after(() => removeTreeWhenReleased(root));
   await sidecar.request("handshake", { protocol: 1, revision: REVISION });
   await sidecar.request("launch", {
     chromium: chromiumPath,

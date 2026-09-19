@@ -9,6 +9,7 @@
 // it directly. `ditto` preserves the bundle's symlinks and extended attributes.
 
 import { execFileSync } from "node:child_process";
+import { createRequire } from "node:module";
 import {
   copyFileSync,
   existsSync,
@@ -22,6 +23,8 @@ import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const require = createRequire(import.meta.url);
+const tauriCli = require.resolve("@tauri-apps/cli/tauri.js");
 const version = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version;
 const outDir = join(root, "dist-release");
 const tag = process.env.CONDUIT_RELEASE_TAG?.trim() || `v${version}`;
@@ -47,12 +50,15 @@ if (!isWindows && !isMac && !isLinux) {
 const extraArgs = process.argv.slice(2).filter((a) => a !== "--");
 
 function run(cmd, args, opts = {}) {
-  // `pnpm` is a .cmd shim on Windows, so it needs the real name rather than a
-  // shell. Spawning through a shell would also concatenate these arguments
-  // unescaped, which Node now warns about.
-  const exe = isWindows && cmd === "pnpm" ? "pnpm.cmd" : cmd;
-  console.log(`\n$ ${exe} ${args.join(" ")}`);
-  execFileSync(exe, args, { cwd: root, stdio: "inherit", ...opts });
+  console.log(`\n$ ${cmd} ${args.join(" ")}`);
+  execFileSync(cmd, args, { cwd: root, stdio: "inherit", ...opts });
+}
+
+function runTauri(args) {
+  // Execute the CLI's JavaScript entry point directly. Windows cannot launch
+  // pnpm.cmd through execFileSync (it fails with EINVAL), while using a shell
+  // would reintroduce argument quoting and command-injection hazards.
+  run(process.execPath, [tauriCli, ...args]);
 }
 
 mkdirSync(outDir, { recursive: true });
@@ -62,11 +68,11 @@ mkdirSync(outDir, { recursive: true });
 if (isWindows) {
   // --no-bundle: there is no bundler target we want. It still builds the
   // release binary and still runs beforeBuildCommand, so the frontend is fresh.
-  run("pnpm", ["tauri", "build", "--no-bundle", ...extraArgs]);
+  runTauri(["build", "--no-bundle", ...extraArgs]);
 } else if (isLinux) {
-  run("pnpm", ["tauri", "build", "--bundles", "appimage", ...extraArgs]);
+  runTauri(["build", "--bundles", "appimage", ...extraArgs]);
 } else {
-  run("pnpm", ["tauri", "build", "--bundles", "app", ...extraArgs]);
+  runTauri(["build", "--bundles", "app", ...extraArgs]);
 }
 
 /* ── locate what was built ── */

@@ -355,6 +355,11 @@ async function installNavigationGuard(context) {
 }
 
 async function handleDownload(download) {
+  // Keep the initiating call object even if Chromium finishes emitting the
+  // download after another await. That lets the tool result report a denied
+  // or failed download deterministically instead of relying on Playwright's
+  // platform-specific click result.
+  const ownerCall = state.currentCall;
   const id = randomUUID();
   const filename = safeFilename(download.suggestedFilename());
   const sourceUrl = download.url();
@@ -370,6 +375,7 @@ async function handleDownload(download) {
     if (!allowed) {
       await download.cancel().catch(() => {});
       await download.delete().catch(() => {});
+      if (ownerCall) ownerCall.downloadError = `the download of ${filename} was denied`;
       send({
         event: "download",
         download: { id, filename, sourceUrl, path: null, status: "denied", error: null },
@@ -385,6 +391,7 @@ async function handleDownload(download) {
       });
     } catch (error) {
       await download.delete().catch(() => {});
+      if (ownerCall) ownerCall.downloadError = `the download of ${filename} failed: ${error}`;
       send({
         event: "download",
         download: { id, filename, sourceUrl, path: null, status: "error", error: String(error) },
@@ -514,6 +521,7 @@ async function callTool(message) {
     name: message.name,
     agent: message.agent || null,
     grants: new Set(Array.isArray(message.grants) ? message.grants : []),
+    downloadError: null,
   };
   try {
     const toolArguments = { ...(message.arguments || {}) };
@@ -563,6 +571,16 @@ async function callTool(message) {
     await new Promise((resolve) => setTimeout(resolve, 25));
     await Promise.allSettled(Array.from(state.pendingDownloads));
     await emitTabs();
+    if (state.currentCall.downloadError) {
+      return relativeOutputLinks({
+        ...result,
+        isError: true,
+        content: [
+          ...(Array.isArray(result.content) ? result.content : []),
+          { type: "text", text: state.currentCall.downloadError },
+        ],
+      });
+    }
     return relativeOutputLinks(result);
   } finally {
     state.currentCall = null;

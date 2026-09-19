@@ -115,7 +115,44 @@ jobs:
             libpipewire-0.3-dev \
             libclang-dev \
             libxdo-dev \
+            meson \
+            ninja-build \
             zip
+
+      - name: Build the pinned PipeWire SDK
+        # Ubuntu 22.04 is deliberately our glibc baseline, but its PipeWire
+        # 0.3.48 headers predate metadata used by pipewire-rs 0.10. Build the
+        # pinned 1.2 API level on the same runner. This keeps the
+        # AppImage compatible with older glibc while making its PipeWire ABI
+        # requirement explicit and bundlable.
+        if: matrix.os == 'ubuntu-22.04'
+        shell: bash
+        run: |
+          source_dir="${RUNNER_TEMP}/pipewire-source"
+          prefix="${RUNNER_TEMP}/pipewire-sdk"
+          git init "$source_dir"
+          git -C "$source_dir" remote add origin https://gitlab.freedesktop.org/pipewire/pipewire.git
+          git -C "$source_dir" fetch --depth 1 origin 7b4c0dd5ecb40e4d2c153699a85c51e1460361e1
+          git -C "$source_dir" checkout --detach FETCH_HEAD
+          test "$(git -C "$source_dir" rev-parse HEAD)" = 7b4c0dd5ecb40e4d2c153699a85c51e1460361e1
+          meson setup "$source_dir/build" "$source_dir" \
+            --prefix="$prefix" \
+            --libdir=lib \
+            -Dauto_features=disabled \
+            -Dspa-plugins=enabled \
+            -Dexamples=disabled \
+            -Dtests=disabled \
+            -Dman=disabled \
+            -Dsession-managers=[] \
+            -Ddbus=disabled \
+            -Dsystemd=disabled \
+            -Dpipewire-alsa=disabled \
+            -Dpipewire-jack=disabled \
+            -Dpipewire-v4l2=disabled
+          meson compile -C "$source_dir/build"
+          meson install -C "$source_dir/build"
+          echo "PKG_CONFIG_PATH=${prefix}/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=${prefix}/lib" >> "$GITHUB_ENV"
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
