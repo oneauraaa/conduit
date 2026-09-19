@@ -153,7 +153,18 @@ test("private sidecar runs all nineteen pinned tools against a local fixture", {
     events.push(message);
     if (message.event === "permission") {
       const denied = message.category === "downloadFiles" && deniedDownloads-- > 0;
-      send({ type: "permissionResult", requestId: message.requestId, allowed: !denied });
+      // A user can take time to answer. Keep the first denial pending long
+      // enough for Playwright MCP's own download observer to finish, proving
+      // that no copy reaches the user-visible output directory before Conduit
+      // receives the decision.
+      if (denied) {
+        setTimeout(
+          () => send({ type: "permissionResult", requestId: message.requestId, allowed: false }),
+          250,
+        );
+      } else {
+        send({ type: "permissionResult", requestId: message.requestId, allowed: true });
+      }
     }
   });
   t.after(async () => {
@@ -273,7 +284,16 @@ test("private sidecar runs all nineteen pinned tools against a local fixture", {
   assert.equal(deniedDownloadClick.isError, true, "denying the download should fail its triggering click");
   assert.ok(events.some((event) => event.event === "download" && event.download.status === "denied"));
   assert.equal(fs.existsSync(path.join(output, "fixture.txt")), false);
-  assert.equal(containsFile(profile, "fixture.txt"), false, "denied download remained in temporary storage");
+  assert.equal(
+    containsFile(profile, "fixture.txt"),
+    false,
+    `denied download remained in temporary storage: ${JSON.stringify(fs.readdirSync(profile, { recursive: true }))}`,
+  );
+  assert.deepEqual(
+    fs.readdirSync(path.join(profile, ".pending-downloads", "chromium")),
+    [],
+    "denied download bytes remained in Chromium spool storage",
+  );
   await call("browser_click", { target: "#download" }, ["openWebsites"]);
   await call("browser_close");
 

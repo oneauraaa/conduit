@@ -42,6 +42,7 @@ const state = {
   serverTransport: null,
   profileId: null,
   outputDir: null,
+  mcpOutputDir: null,
   headless: true,
   viewport: { width: 1280, height: 720 },
   previewVisible: false,
@@ -140,6 +141,29 @@ function outputPath(filename, root = state.outputDir) {
     throw new Error("browser output filename escaped the Conduit output folder");
   }
   fs.mkdirSync(path.dirname(candidate), { recursive: true });
+  return candidate;
+}
+
+function mcpDownloadPath(filename) {
+  if (!state.mcpOutputDir) return null;
+  // @playwright/mcp@0.0.80 saves every observed download to outputDir using
+  // this sanitizer. Keep that automatic copy in isolated spool storage so it
+  // can never bypass Conduit's approval-controlled promotion into Downloads.
+  const value = String(filename);
+  const sanitizePart = (part) => part.replace(
+    /[\x00-\x2C\x2E-\x2F\x3A-\x40\x5B-\x60\x7B-\x7F]+/g,
+    "-",
+  );
+  const separator = value.lastIndexOf(".");
+  const sanitized = separator === -1
+    ? sanitizePart(value)
+    : `${sanitizePart(value.slice(0, separator))}.${sanitizePart(value.slice(separator + 1))}`;
+  const root = path.resolve(state.mcpOutputDir);
+  const candidate = path.resolve(root, sanitized);
+  const relative = path.relative(root, candidate);
+  // Never let an unusual suggested filename turn cleanup into deletion of the
+  // spool root (or anything outside it).
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) return null;
   return candidate;
 }
 
@@ -362,6 +386,7 @@ async function handleDownload(download) {
   const ownerCall = state.currentCall;
   const id = randomUUID();
   const filename = safeFilename(download.suggestedFilename());
+  const mcpCopy = mcpDownloadPath(download.suggestedFilename());
   const sourceUrl = download.url();
   const destination = uniqueDestination(filename);
   const agent = state.currentCall ? state.currentCall.agent : null;
@@ -398,6 +423,13 @@ async function handleDownload(download) {
       });
     }
   } finally {
+    // Playwright MCP observes the same page event and saves its own copy. Its
+    // artifact callback settles alongside ours, so yield once before removing
+    // that isolated copy on both approval and denial.
+    await new Promise((resolve) => setImmediate(resolve));
+    if (mcpCopy) {
+      await fs.promises.rm(mcpCopy, { force: true, maxRetries: 20, retryDelay: 50 });
+    }
     state.reservedDestinations.delete(destination);
   }
 }
@@ -442,9 +474,13 @@ async function launch(message) {
   // to Downloads, and the next launch removes them before Chromium can reuse
   // the profile.
   fs.rmSync(pendingDir, { recursive: true, force: true });
-  fs.mkdirSync(pendingDir, { recursive: true });
+  const chromiumPendingDir = path.join(pendingDir, "chromium");
+  const mcpOutputDir = path.join(pendingDir, "mcp");
+  fs.mkdirSync(chromiumPendingDir, { recursive: true });
+  fs.mkdirSync(mcpOutputDir, { recursive: true });
   state.profileId = message.profileId;
   state.outputDir = message.outputDir;
+  state.mcpOutputDir = mcpOutputDir;
   state.headless = Boolean(message.headless);
   state.viewport = message.viewport || { width: 1280, height: 720 };
   state.closing = false;
@@ -455,7 +491,7 @@ async function launch(message) {
     chromiumSandbox: true,
     viewport: state.viewport,
     acceptDownloads: true,
-    downloadsPath: pendingDir,
+    downloadsPath: chromiumPendingDir,
     // Routing is the final guard for privileged URL schemes. Blocking service
     // workers prevents an existing profile worker from bypassing that guard.
     serviceWorkers: "block",
@@ -488,7 +524,7 @@ async function launch(message) {
   const connection = await createConnection(
     {
       capabilities: ["core"],
-      outputDir: message.outputDir,
+      outputDir: mcpOutputDir,
       imageResponses: "allow",
       snapshot: { mode: "full" },
       allowUnrestrictedFileAccess: true,
