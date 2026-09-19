@@ -41,7 +41,7 @@ impl SidecarProcess {
         manager: Arc<BrowserManager>,
         executable: &std::path::Path,
     ) -> Result<Self, String> {
-        let process_id = uuid::Uuid::new_v4().to_string();
+        let process_id = crate::random::uuid_v4();
         let mut child = Command::new(executable)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

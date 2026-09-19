@@ -99,7 +99,7 @@ mod tests {
 
     #[test]
     fn history_is_newest_first_searchable_and_paginated() {
-        let root = std::env::temp_dir().join(format!("conduit-history-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("conduit-history-{}", crate::random::uuid_v4()));
         append(&root, &entry("one", "First", 10)).unwrap();
         append(&root, &entry("two", "Matching page", 30)).unwrap();
         append(&root, &entry("three", "Matching later", 20)).unwrap();
@@ -115,7 +115,7 @@ mod tests {
 
     #[test]
     fn cursor_does_not_skip_entries_with_the_same_timestamp() {
-        let root = std::env::temp_dir().join(format!("conduit-history-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("conduit-history-{}", crate::random::uuid_v4()));
         append(&root, &entry("b", "B", 30)).unwrap();
         append(&root, &entry("a", "A", 30)).unwrap();
         let (first, cursor) = read(&root, "profile", None, None, 1).unwrap();

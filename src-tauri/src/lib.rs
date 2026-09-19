@@ -6,6 +6,7 @@ mod hyprland;
 mod mcp;
 mod panic_stop;
 mod platform;
+mod random;
 mod state;
 mod store;
 mod tailscale;

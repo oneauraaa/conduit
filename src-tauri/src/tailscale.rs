@@ -205,39 +205,7 @@ pub fn stop_funnel(remote_port: u16) -> Result<(), String> {
 /// lock on the public sharing URL, and a predictable one that looks legitimate
 /// is far worse than not starting.
 pub fn generate_token() -> String {
-    let bytes = random_bytes();
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-/// `/dev/urandom` is the kernel CSPRNG on both macOS and Linux, so one
-/// implementation covers them; Windows has its own below.
-#[cfg(not(target_os = "windows"))]
-fn random_bytes() -> [u8; 16] {
-    use std::io::Read;
-
-    let mut bytes = [0u8; 16];
-    if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
-        if f.read_exact(&mut bytes).is_ok() {
-            return bytes;
-        }
-    }
-    panic!("could not read /dev/urandom to generate a sharing key");
-}
-
-#[cfg(target_os = "windows")]
-fn random_bytes() -> [u8; 16] {
-    use windows::Win32::Security::Cryptography::{
-        BCRYPT_USE_SYSTEM_PREFERRED_RNG, BCryptGenRandom,
-    };
-
-    let mut bytes = [0u8; 16];
-    // A null algorithm handle with USE_SYSTEM_PREFERRED_RNG is the documented
-    // way to reach the system CSPRNG without opening a provider first.
-    let status = unsafe { BCryptGenRandom(None, &mut bytes, BCRYPT_USE_SYSTEM_PREFERRED_RNG) };
-    if status.is_ok() {
-        return bytes;
-    }
-    panic!("could not reach the system CSPRNG to generate a sharing key: {status:?}");
+    crate::random::token_hex()
 }
 
 #[cfg(test)]

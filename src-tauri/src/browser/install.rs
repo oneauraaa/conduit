@@ -87,7 +87,7 @@ fn install_blocking(manager: &BrowserManager, cancelled: &AtomicBool) -> Result<
     );
     let staging = manager
         .runtime_root()
-        .join(format!("staging-{}", uuid::Uuid::new_v4()));
+        .join(format!("staging-{}", crate::random::uuid_v4()));
     fs::create_dir_all(&staging).map_err(|e| format!("could not create staging folder: {e}"))?;
     fs::write(staging.join(OWNER_MARKER), EXPECTED_REVISION)
         .map_err(|e| format!("could not mark the staging folder: {e}"))?;
@@ -578,7 +578,7 @@ mod tests {
 
     #[test]
     fn safe_extraction_rejects_traversal() {
-        let root = std::env::temp_dir().join(format!("conduit-extract-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("conduit-extract-{}", crate::random::uuid_v4()));
         fs::create_dir_all(&root).unwrap();
         let archive = root.join("runtime.zip");
         let file = File::create(&archive).unwrap();
@@ -600,7 +600,7 @@ mod tests {
     fn extraction_preserves_helper_executable_bits() {
         use std::os::unix::fs::PermissionsExt;
 
-        let root = std::env::temp_dir().join(format!("conduit-mode-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("conduit-mode-{}", crate::random::uuid_v4()));
         fs::create_dir_all(&root).unwrap();
         let archive = root.join("runtime.zip");
         let file = File::create(&archive).unwrap();
@@ -626,7 +626,7 @@ mod tests {
 
     #[test]
     fn promotion_retains_the_previous_working_runtime() {
-        let root = std::env::temp_dir().join(format!("conduit-promote-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("conduit-promote-{}", crate::random::uuid_v4()));
         let active = root.join("active");
         let staging = root.join("staging-new");
         for (directory, value) in [(&active, "old"), (&staging, "new")] {
@@ -654,7 +654,7 @@ mod tests {
 
     #[test]
     fn checksum_failure_discards_the_corrupt_partial_for_retry() {
-        let root = std::env::temp_dir().join(format!("conduit-hash-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("conduit-hash-{}", crate::random::uuid_v4()));
         fs::create_dir_all(&root).unwrap();
         let part = root.join("runtime.zip.part");
         fs::write(&part, b"corrupt archive").unwrap();
@@ -684,7 +684,7 @@ mod tests {
                 .unwrap();
         });
 
-        let root = std::env::temp_dir().join(format!("conduit-resume-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("conduit-resume-{}", crate::random::uuid_v4()));
         fs::create_dir_all(&root).unwrap();
         let part = root.join("bundle.part");
         fs::write(&part, b"hello ").unwrap();
@@ -708,7 +708,7 @@ mod tests {
 
     #[test]
     fn deletion_requires_a_direct_child_with_our_marker() {
-        let root = std::env::temp_dir().join(format!("conduit-runtime-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("conduit-runtime-{}", crate::random::uuid_v4()));
         let owned = root.join("previous");
         fs::create_dir_all(&owned).unwrap();
         assert!(remove_owned_directory(&root, &owned).is_err());

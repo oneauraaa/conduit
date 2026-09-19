@@ -257,7 +257,7 @@ impl Conduit {
     pub fn new(state: Shared) -> Self {
         Self {
             state,
-            session_id: uuid::Uuid::new_v4().to_string(),
+            session_id: crate::random::uuid_v4(),
             session_lifetime: std::sync::Arc::new(()),
             tool_router: Self::tool_router(),
         }

@@ -77,7 +77,7 @@ impl BrowserManager {
 
         let disk = load_disk_state(&root).unwrap_or_else(|| {
             let profile = BrowserProfile {
-                id: uuid::Uuid::new_v4().to_string(),
+                id: crate::random::uuid_v4(),
                 name: "Default".into(),
                 incognito: false,
             };
@@ -335,7 +335,7 @@ impl BrowserManager {
             let profile_dir = if profile.incognito {
                 let path = self
                     .root
-                    .join(format!("incognito-{}", uuid::Uuid::new_v4()));
+                    .join(format!("incognito-{}", crate::random::uuid_v4()));
                 fs::create_dir_all(&path)
                     .map_err(|e| format!("could not create Incognito profile: {e}"))?;
                 if let Err(error) = fs::write(path.join(PROFILE_MARKER), INCOGNITO_ID) {
@@ -696,7 +696,7 @@ impl BrowserManager {
     pub fn create_profile(&self, name: String) -> Result<BrowserState, String> {
         let name = clean_profile_name(&name)?;
         let profile = BrowserProfile {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: crate::random::uuid_v4(),
             name,
             incognito: false,
         };
@@ -1208,7 +1208,7 @@ mod tests {
     #[test]
     fn malformed_profile_state_is_rejected_before_paths_are_used() {
         let root =
-            std::env::temp_dir().join(format!("conduit-profile-state-{}", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("conduit-profile-state-{}", crate::random::uuid_v4()));
         fs::create_dir_all(&root).unwrap();
         let state = BrowserDiskState {
             mode: BrowserMode::Headless,
