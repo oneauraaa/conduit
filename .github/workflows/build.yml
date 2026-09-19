@@ -239,6 +239,18 @@ jobs:
             Write-Host "dumpbin was not found under $visualStudio"
           }
 
+          $dependenciesArchive = Join-Path $env:RUNNER_TEMP 'dependencies-v1.11.1.zip'
+          $dependenciesDirectory = Join-Path $env:RUNNER_TEMP 'dependencies-v1.11.1'
+          Invoke-WebRequest -Uri 'https://github.com/lucasg/Dependencies/releases/download/v1.11.1/Dependencies_x64_Release_.without.peview.exe.zip' -OutFile $dependenciesArchive
+          $actualHash = (Get-FileHash $dependenciesArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+          $expectedHash = '7d22dc00f1c09fd4415d48ad74d1cf801893e83b9a39944b0fce6dea7ceaea99'
+          if ($actualHash -ne $expectedHash) {
+            throw "Dependencies archive checksum mismatch: $actualHash"
+          }
+          Expand-Archive $dependenciesArchive -DestinationPath $dependenciesDirectory
+          Write-Host "--- recursively resolved test executable dependencies ---"
+          & "$dependenciesDirectory\Dependencies.exe" -chain -depth 4 $binary.FullName
+
       - name: Upload Windows loader diagnostics
         if: failure() && matrix.os == 'windows-latest'
         uses: actions/upload-artifact@v4
