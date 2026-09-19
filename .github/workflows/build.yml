@@ -218,7 +218,9 @@ jobs:
           if ($process.HasExited) {
             Write-Host "Application smoke-test exit code: $($process.ExitCode)"
           } else {
+            $process.Refresh()
             Write-Host "Application smoke test: process started successfully"
+            Write-Host "Application window title: $($process.MainWindowTitle)"
             Stop-Process -Id $process.Id -Force
           }
 
@@ -250,6 +252,42 @@ jobs:
           Expand-Archive $dependenciesArchive -DestinationPath $dependenciesDirectory
           Write-Host "--- recursively resolved test executable dependencies ---"
           & "$dependenciesDirectory\Dependencies.exe" -chain -depth 4 $binary.FullName
+
+          # A resolved DLL can still be too old for one of the symbols in the
+          # executable's import table. Ask the Windows loader for every named
+          # import so the log identifies the exact DLL!symbol behind error 127.
+          Add-Type @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class NativeImportProbe {
+            [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+            public static extern IntPtr LoadLibraryW(string fileName);
+            [DllImport("kernel32.dll", CharSet = CharSet.Ansi, SetLastError = true)]
+            public static extern IntPtr GetProcAddress(IntPtr module, string name);
+            [DllImport("kernel32.dll")]
+            public static extern bool FreeLibrary(IntPtr module);
+          }
+          '@
+          $importJson = & "$dependenciesDirectory\Dependencies.exe" -imports -json $binary.FullName | Out-String
+          $imports = ($importJson | ConvertFrom-Json).Imports
+          Write-Host "--- direct import resolution ---"
+          foreach ($dllImport in $imports) {
+            $module = [NativeImportProbe]::LoadLibraryW($dllImport.Name)
+            if ($module -eq [IntPtr]::Zero) {
+              $errorCode = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+              Write-Host "MISSING MODULE: $($dllImport.Name) (Win32 $errorCode)"
+              continue
+            }
+            foreach ($import in $dllImport.ImportList) {
+              if (-not $import.ImportByOrdinal -and $import.Name) {
+                $address = [NativeImportProbe]::GetProcAddress($module, $import.Name)
+                if ($address -eq [IntPtr]::Zero) {
+                  Write-Host "MISSING ENTRYPOINT: $($dllImport.Name)!$($import.Name)"
+                }
+              }
+            }
+            [void][NativeImportProbe]::FreeLibrary($module)
+          }
 
       - name: Upload Windows loader diagnostics
         if: failure() && matrix.os == 'windows-latest'
