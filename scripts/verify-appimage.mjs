@@ -1,10 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 export const TRAY_LIBRARY = "libayatana-appindicator3.so.1";
+export const GTK_HOOK = "apprun-hooks/linuxdeploy-plugin-gtk.sh";
 const TRAY_DEPENDENCY_PREFIXES = ["libayatana-", "libdbusmenu-"];
 
 function elfDependencies(libraryPath) {
@@ -26,7 +27,16 @@ export function verifyAppImage(appImagePath) {
       stdio: ["ignore", "ignore", "pipe"],
     });
 
-    const libraryRoot = join(extractRoot, "squashfs-root", "usr", "lib");
+    const appDir = join(extractRoot, "squashfs-root");
+    const gtkHook = readFileSync(join(appDir, GTK_HOOK), "utf8");
+    if (/^export GDK_BACKEND=x11\b/m.test(gtkHook)) {
+      throw new Error("AppImage launcher forces X11 instead of Wayland");
+    }
+    if (!/^export GDK_BACKEND=wayland\b/m.test(gtkHook)) {
+      throw new Error("AppImage launcher does not select the Wayland backend");
+    }
+
+    const libraryRoot = join(appDir, "usr", "lib");
     const missing = [];
     const visited = new Set();
     const pending = [TRAY_LIBRARY];

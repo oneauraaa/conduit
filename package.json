@@ -1,12 +1,13 @@
 {
   "name": "conduit",
   "private": true,
-  "version": "1.0.1",
+  "version": "1.0.2",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
+    "test:packaging": "node --test scripts/*.test.mjs",
     "preview": "vite preview",
     "tauri": "tauri",
     "package": "node scripts/package.mjs"

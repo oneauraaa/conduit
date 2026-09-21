@@ -22,6 +22,7 @@ import {
 import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { verifyAppImage } from "./verify-appimage.mjs";
+import { repackAppImage } from "./repack-appimage.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(import.meta.url);
@@ -154,6 +155,7 @@ if (!existsSync(payload)) {
 }
 
 if (isLinux) {
+  repackAppImage(payload, version);
   verifyAppImage(payload);
 }
 
