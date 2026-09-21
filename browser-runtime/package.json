@@ -1,6 +1,6 @@
 {
   "name": "conduit-browser-runtime",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "Private Chromium sidecar shipped as an optional Conduit bundle",
   "license": "MIT",

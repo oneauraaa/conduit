@@ -21,6 +21,7 @@ import {
 } from "node:fs";
 import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { verifyAppImage } from "./verify-appimage.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(import.meta.url);
@@ -61,6 +62,38 @@ function runTauri(args) {
   run(process.execPath, [tauriCli, ...args]);
 }
 
+function linuxAppImageConfig() {
+  const libraryDir = execFileSync(
+    "pkg-config",
+    ["--variable=libdir", "ayatana-appindicator3-0.1"],
+    { encoding: "utf8" },
+  ).trim();
+  const trayLibrary = join(libraryDir, "libayatana-appindicator3.so.1");
+
+  if (!libraryDir || !existsSync(trayLibrary)) {
+    console.error(
+      "libayatana-appindicator3.so.1 was not found; install libayatana-appindicator3-dev",
+    );
+    process.exit(1);
+  }
+
+  // tray-icon loads AppIndicator with dlopen, so LinuxDeploy cannot discover
+  // it from the executable's ELF dependencies. Seed the library explicitly;
+  // LinuxDeploy will then bundle its matching dbusmenu/Ayatana dependency
+  // family instead of mixing the AppImage's GLib with the host's libraries.
+  return JSON.stringify({
+    bundle: {
+      linux: {
+        appimage: {
+          files: {
+            "/usr/lib/libayatana-appindicator3.so.1": trayLibrary,
+          },
+        },
+      },
+    },
+  });
+}
+
 mkdirSync(outDir, { recursive: true });
 
 /* ── build ── */
@@ -70,7 +103,14 @@ if (isWindows) {
   // release binary and still runs beforeBuildCommand, so the frontend is fresh.
   runTauri(["build", "--no-bundle", ...extraArgs]);
 } else if (isLinux) {
-  runTauri(["build", "--bundles", "appimage", ...extraArgs]);
+  runTauri([
+    "build",
+    "--bundles",
+    "appimage",
+    "--config",
+    linuxAppImageConfig(),
+    ...extraArgs,
+  ]);
 } else {
   runTauri(["build", "--bundles", "app", ...extraArgs]);
 }
@@ -111,6 +151,10 @@ if (isWindows) {
 if (!existsSync(payload)) {
   console.error(`\nbuild finished but ${payload} is missing`);
   process.exit(1);
+}
+
+if (isLinux) {
+  verifyAppImage(payload);
 }
 
 /* ── stage the release asset ── */
