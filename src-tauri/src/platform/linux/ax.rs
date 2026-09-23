@@ -54,6 +54,13 @@ const MAX_ELEMENTS: usize = 400;
 /// mirrors, a runaway tree here would hold a tokio worker for many seconds, so
 /// the walk is bounded by work as well as by depth.
 const MAX_VISITS: usize = 4000;
+/// How long any one application gets to answer.
+///
+/// A toolkit serves AT-SPI from its own main loop, so an application that is
+/// busy or hung simply never replies — and zbus waits forever by default.
+/// Readiness runs on conduit's own main thread, where waiting forever means a
+/// window that never appears. A healthy application answers in milliseconds.
+const CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// A node: the bus name that owns it, and its object path.
 type Node = (String, zbus::zvariant::OwnedObjectPath);
@@ -76,7 +83,7 @@ fn a11y_bus() -> Result<Connection, String> {
         .map_err(|e| format!("the accessibility bus is not running: {e}"))?;
 
     zbus::blocking::connection::Builder::address(address.as_str())
-        .and_then(|b| b.build())
+        .and_then(|b| b.method_timeout(CALL_TIMEOUT).build())
         .map_err(|e| format!("could not connect to the accessibility bus: {e}"))
 }
 
@@ -152,13 +159,35 @@ fn children(conn: &Connection, node: &Node) -> Option<Vec<Node>> {
     Some(raw)
 }
 
+/// Whether `node` is served by this process.
+///
+/// Asked of the bus daemon, never of the node: conduit's own tree is answered
+/// by the GTK main loop, and readiness runs *on* that main loop — at startup,
+/// before the first window is shown. A call into our own tree from there waits
+/// on the one thread that could reply, and the app hangs with no window at all.
+fn is_own(dbus: Option<&Proxy<'_>>, node: &Node) -> bool {
+    dbus.and_then(|d| {
+        d.call::<_, _, u32>("GetConnectionUnixProcessID", &(node.0.as_str(),))
+            .ok()
+    }) == Some(std::process::id())
+}
+
 fn applications(conn: &Connection) -> Option<Vec<(String, Node)>> {
     let root = (REGISTRY_NAME.to_string(), root_path());
     let apps = children(conn, &root)?;
+    let dbus = Proxy::new(
+        conn,
+        "org.freedesktop.DBus",
+        "/org/freedesktop/DBus",
+        "org.freedesktop.DBus",
+    )
+    .ok();
     // conduit publishes its own GTK tree. It is useful for debugging, but it
-    // must not make readiness green or become the default screen target.
+    // must not make readiness green or become the default screen target — and
+    // it must be dropped before its name is asked for, see `is_own`.
     Some(
         apps.into_iter()
+            .filter(|node| !is_own(dbus.as_ref(), node))
             .map(|node| {
                 let name = attributes(conn, &node)
                     .and_then(|a| string_attr(&a, "Name"))
