@@ -1262,6 +1262,97 @@ pub fn agent_view(state: &HyprlandState) -> serde_json::Value {
     })
 }
 
+/* ── launch at login ────────────────────────────────────────── */
+
+/// Tags the one line conduit owns in the user's config, so it can be found
+/// again to update or remove without touching anything the user wrote.
+const AUTOSTART_MARKER: &str = "# conduit: launch at login";
+
+/// Adds or removes conduit's `exec-once` line in the config Hyprland loaded.
+///
+/// Hyprland does not run XDG autostart entries: nothing in a plain Hyprland
+/// session starts `xdg-desktop-autostart.target`, so the `.desktop` file the
+/// autostart plugin writes is never read, and the switch would say "on" while
+/// conduit never started. `exec-once` is the launch-at-login Hyprland honours.
+///
+/// Lua configs are not edited. conduit does not interpret them (see the module
+/// notes), and appending to code it cannot read is how a config gets broken.
+pub fn set_autostart(enabled: bool) -> Result<(), String> {
+    let Some(path) = hyprland_choice() else {
+        return if enabled {
+            Err("could not find your hyprland config to add conduit's exec-once line to".into())
+        } else {
+            Ok(())
+        };
+    };
+
+    let exe = if enabled { Some(launch_path()?) } else { None };
+
+    if path.extension().is_some_and(|e| e == "lua") {
+        return match exe {
+            Some(exe) => Err(format!(
+                "{} is a lua config, which conduit does not edit. to start conduit at login, \
+                 add an exec-once that runs {} --hidden",
+                path.display(),
+                exe.display()
+            )),
+            None => Ok(()),
+        };
+    }
+
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| format!("could not read {}: {e}", path.display()))?;
+    let next = with_autostart(&text, exe.as_deref().map(autostart_line).as_deref());
+    // Hyprland reloads on every write. That never re-runs `exec-once`, but an
+    // unchanged file is left alone anyway, since this runs on every launch.
+    if next != text {
+        std::fs::write(&path, next)
+            .map_err(|e| format!("could not update {}: {e}", path.display()))?;
+    }
+    Ok(())
+}
+
+/// What to start at login. The AppImage itself when there is one — the
+/// running binary lives inside its mount, which is gone once this run ends.
+/// The autostart plugin applies the same rule to the `.desktop` entry.
+fn launch_path() -> Result<PathBuf, String> {
+    match std::env::var_os("APPIMAGE").filter(|p| !p.is_empty()) {
+        Some(appimage) => Ok(PathBuf::from(appimage)),
+        None => {
+            std::env::current_exe().map_err(|e| format!("could not find conduit's binary: {e}"))
+        }
+    }
+}
+
+/// Hyprland hands `exec-once` to `/bin/sh -c`, so the path is single-quoted
+/// for the shell; hyprlang reads `#` as a comment, so a literal one is doubled.
+fn autostart_line(exe: &Path) -> String {
+    let quoted = format!("'{}'", exe.display().to_string().replace('\'', r"'\''"));
+    format!(
+        "exec-once = {} --hidden {AUTOSTART_MARKER}",
+        quoted.replace('#', "##")
+    )
+}
+
+/// `text` with conduit's line replaced by `line`, or dropped when it is `None`.
+fn with_autostart(text: &str, line: Option<&str>) -> String {
+    let ours = |l: &str| l.trim_end().ends_with(AUTOSTART_MARKER);
+    if line.is_none() && !text.lines().any(ours) {
+        return text.to_string();
+    }
+
+    let mut out: String = text
+        .lines()
+        .filter(|l| !ours(l))
+        .flat_map(|l| [l, "\n"])
+        .collect();
+    if let Some(line) = line {
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
 /* ── tests ──────────────────────────────────────────────────── */
 
 #[cfg(test)]
@@ -1678,5 +1769,40 @@ mod tests {
         assert_eq!(merged.len(), 1);
         assert!(merged[0].active);
         assert_eq!(merged[0].chord(), "SUPER + 5");
+    }
+
+    #[test]
+    fn autostart_line_survives_the_shell_and_hyprlang() {
+        assert_eq!(
+            autostart_line(Path::new("/home/me/Downloads/conduit.AppImage")),
+            "exec-once = '/home/me/Downloads/conduit.AppImage' --hidden # conduit: launch at login"
+        );
+        assert_eq!(
+            autostart_line(Path::new("/home/me/it's #1/conduit")),
+            r"exec-once = '/home/me/it'\''s ##1/conduit' --hidden # conduit: launch at login"
+        );
+    }
+
+    #[test]
+    fn autostart_is_added_replaced_and_removed_without_touching_the_rest() {
+        let user = "exec-once = hyprpaper\nbind = SUPER, Q, killactive\n";
+        let old = autostart_line(Path::new("/old/conduit.AppImage"));
+        let new = autostart_line(Path::new("/new/conduit.AppImage"));
+
+        let added = with_autostart(user, Some(&old));
+        assert_eq!(added, format!("{user}{old}\n"));
+
+        // A moved AppImage replaces the line rather than adding a second one.
+        let replaced = with_autostart(&added, Some(&new));
+        assert_eq!(replaced, format!("{user}{new}\n"));
+        assert_eq!(with_autostart(&replaced, Some(&new)), replaced);
+
+        assert_eq!(with_autostart(&replaced, None), user);
+        // Nothing of ours to remove: the file is returned byte for byte, even
+        // without a trailing newline.
+        assert_eq!(
+            with_autostart("exec-once = waybar", None),
+            "exec-once = waybar"
+        );
     }
 }

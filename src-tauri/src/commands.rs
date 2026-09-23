@@ -287,7 +287,14 @@ pub fn apply_autostart(app: &AppHandle<Wry>, enabled: bool) -> Result<(), String
     } else {
         manager.disable()
     };
-    result.map_err(|e| format!("could not change the launch-at-login entry: {e}"))
+    result.map_err(|e| format!("could not change the launch-at-login entry: {e}"))?;
+
+    // Hyprland never reads the XDG entry above; see `hyprland::set_autostart`.
+    // `available` is false off Linux, so this is a no-op everywhere else.
+    if crate::hyprland::available() {
+        crate::hyprland::set_autostart(enabled)?;
+    }
+    Ok(())
 }
 
 /* ── readiness ── */
