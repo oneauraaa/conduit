@@ -7,6 +7,7 @@ mod mcp;
 mod panic_stop;
 mod platform;
 mod random;
+mod sandbox;
 mod state;
 mod store;
 mod tailscale;
@@ -152,6 +153,22 @@ pub fn run() {
             commands::disable_remote,
             commands::regenerate_remote_token,
             commands::hide_to_tray,
+            commands::get_sandbox_state,
+            commands::refresh_docker,
+            commands::create_sandbox,
+            commands::update_sandbox,
+            commands::delete_sandbox,
+            commands::start_sandbox,
+            commands::stop_sandbox,
+            commands::cancel_sandbox_build,
+            commands::set_sandbox_stop_on_quit,
+            commands::interrupt_sandbox_agent,
+            commands::resume_sandbox_agent,
+            commands::open_sandbox_viewer,
+            commands::sandbox_viewer_send,
+            commands::close_sandbox_viewer,
+            commands::set_sandbox_tab_visible,
+            commands::open_docker_download,
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -188,6 +205,11 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 mcp::server::start(boot).await;
             });
+
+            // Look for Docker and pick up any sandbox still running from a
+            // previous launch. Never blocks startup: Docker Desktop can take
+            // a long time to answer while it boots.
+            shared.sandboxes.initialize();
 
             if shared.settings().browser_auto_start && shared.browser.ready() {
                 let browser = shared.browser.clone();

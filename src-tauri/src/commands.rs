@@ -1,11 +1,13 @@
 //! Tauri commands — the surface the webviews call.
 
+use tauri::ipc::{Channel, InvokeBody, InvokeResponseBody};
 use tauri::{AppHandle, Emitter, Manager, State, Wry};
 
 use crate::agents::{self, AgentTarget};
 use crate::browser::model::{BrowserMode, BrowserRestartStrategy, BrowserState};
 use crate::mcp::{catalog::ToolDef, server};
 use crate::platform::permissions;
+use crate::sandbox::model::{NewSandbox, SandboxPatch, SandboxesState};
 use crate::state::{
     AccessMode, BrowserPermissionCategory, BrowserPermissionMode, ControlState, Decision,
     Readiness, ServerState, Settings, Shared, ToolsAccess,
@@ -433,16 +435,24 @@ pub fn list_agents(state: State<'_, Shared>) -> Vec<AgentTarget> {
     agents::list(state.settings().port)
 }
 
+/// `target` is `"host"` (or absent) for this computer, else a sandbox id.
 #[tauri::command]
 pub fn install_agent(
     app: AppHandle<Wry>,
     state: State<'_, Shared>,
     id: String,
+    target: Option<String>,
 ) -> Result<AgentTarget, String> {
     let port = state.settings().port;
-    let target = agents::install(&id, port)?;
+    let target = agents::Target::parse(target.as_deref())?;
+    if let agents::Target::Sandbox(sandbox) = &target {
+        if !state.sandboxes.exists(sandbox) {
+            return Err(format!("there is no sandbox called {sandbox}"));
+        }
+    }
+    let row = agents::install(&id, port, &target)?;
     let _ = app.emit("agents:changed", agents::list(port));
-    Ok(target)
+    Ok(row)
 }
 
 #[tauri::command]
@@ -450,11 +460,178 @@ pub fn uninstall_agent(
     app: AppHandle<Wry>,
     state: State<'_, Shared>,
     id: String,
+    target: Option<String>,
 ) -> Result<AgentTarget, String> {
     let port = state.settings().port;
-    let target = agents::uninstall(&id, port)?;
+    let target = agents::Target::parse(target.as_deref())?;
+    let row = agents::uninstall(&id, port, &target)?;
     let _ = app.emit("agents:changed", agents::list(port));
-    Ok(target)
+    Ok(row)
+}
+
+/* ── sandboxes ── */
+
+#[tauri::command]
+pub fn get_sandbox_state(state: State<'_, Shared>) -> SandboxesState {
+    state.sandboxes.snapshot()
+}
+
+#[tauri::command]
+pub async fn refresh_docker(state: State<'_, Shared>) -> Result<SandboxesState, ()> {
+    Ok(state.sandboxes.refresh_docker().await)
+}
+
+/// Creating a sandbox is asking for one, so it also starts — building the
+/// desktop image first if this OS has never been used. Progress arrives on
+/// `sandbox:state`; the command itself returns as soon as the entry exists.
+#[tauri::command]
+pub async fn create_sandbox(
+    state: State<'_, Shared>,
+    sandbox: NewSandbox,
+) -> Result<SandboxesState, String> {
+    let manager = state.sandboxes.clone();
+    let spec = manager.create(sandbox)?;
+    let starter = manager.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = starter.start(&spec.id).await {
+            tracing::warn!(sandbox = %spec.id, %error, "the new sandbox did not start");
+        }
+    });
+    Ok(manager.snapshot())
+}
+
+#[tauri::command]
+pub async fn update_sandbox(
+    state: State<'_, Shared>,
+    id: String,
+    patch: SandboxPatch,
+) -> Result<SandboxesState, String> {
+    let manager = state.sandboxes.clone();
+    manager.update(&id, patch).await?;
+    Ok(manager.snapshot())
+}
+
+/// Removes the sandbox, its container and disk, its MCP endpoint, and every
+/// agent config entry that pointed at it — a dangling entry would only give
+/// the agent a 404 to puzzle over.
+#[tauri::command]
+pub async fn delete_sandbox(
+    app: AppHandle<Wry>,
+    state: State<'_, Shared>,
+    id: String,
+) -> Result<SandboxesState, String> {
+    let shared = state.inner().clone();
+    shared.sandboxes.delete(&id).await?;
+    if let Some(services) = shared.sandbox_services.read().clone() {
+        services.remove(&id);
+    }
+    let port = shared.settings().port;
+    if let Err(error) = agents::remove_everywhere(&agents::Target::Sandbox(id.clone())) {
+        tracing::warn!(sandbox = %id, %error, "could not remove the sandbox from every agent");
+    }
+    let _ = app.emit("agents:changed", agents::list(port));
+    Ok(shared.sandboxes.snapshot())
+}
+
+#[tauri::command]
+pub async fn start_sandbox(state: State<'_, Shared>, id: String) -> Result<SandboxesState, String> {
+    let manager = state.sandboxes.clone();
+    manager.start(&id).await?;
+    Ok(manager.snapshot())
+}
+
+#[tauri::command]
+pub async fn stop_sandbox(state: State<'_, Shared>, id: String) -> Result<SandboxesState, String> {
+    let manager = state.sandboxes.clone();
+    manager.stop(&id).await?;
+    Ok(manager.snapshot())
+}
+
+#[tauri::command]
+pub fn cancel_sandbox_build(state: State<'_, Shared>, id: String) {
+    state.sandboxes.cancel_build(&id);
+}
+
+#[tauri::command]
+pub fn set_sandbox_stop_on_quit(
+    state: State<'_, Shared>,
+    stop: bool,
+) -> Result<SandboxesState, String> {
+    state.sandboxes.set_stop_on_quit(stop)?;
+    Ok(state.sandboxes.snapshot())
+}
+
+/// The Sandbox tab's "stop agent": cancels whatever an agent is doing in this
+/// sandbox and refuses its next calls until resumed.
+#[tauri::command]
+pub fn interrupt_sandbox_agent(state: State<'_, Shared>, id: String) -> SandboxesState {
+    state.sandboxes.interrupt(&id);
+    state.sandboxes.snapshot()
+}
+
+#[tauri::command]
+pub fn resume_sandbox_agent(state: State<'_, Shared>, id: String) -> SandboxesState {
+    state.sandboxes.resume(&id);
+    state.sandboxes.snapshot()
+}
+
+/// Opens a live view of a running sandbox. VNC bytes stream to `on_data`; an
+/// empty message means the stream ended. Returns the viewer's handle.
+///
+/// Async not for any await, but for where it runs: a sync command runs on the
+/// main thread, which has no Tokio reactor to spawn the `docker exec` on.
+#[tauri::command]
+pub async fn open_sandbox_viewer(
+    state: State<'_, Shared>,
+    id: String,
+    on_data: Channel<InvokeResponseBody>,
+) -> Result<String, String> {
+    let manager = &state.sandboxes;
+    if !manager.is_running(&id) {
+        return Err("the sandbox is not running".into());
+    }
+    let cli = manager.cli_for_viewer()?;
+    manager.viewers.open(cli, &id, on_data)
+}
+
+/// Bytes from the viewer to the sandbox, as a raw body with the viewer's
+/// handle in the `x-viewer` header — raw so a key press is not a JSON array.
+#[tauri::command]
+pub async fn sandbox_viewer_send(
+    state: State<'_, Shared>,
+    request: tauri::ipc::Request<'_>,
+) -> Result<(), String> {
+    let handle = request
+        .headers()
+        .get("x-viewer")
+        .and_then(|v| v.to_str().ok())
+        .ok_or("missing viewer handle")?
+        .to_string();
+    let InvokeBody::Raw(bytes) = request.body() else {
+        return Err("expected raw bytes".into());
+    };
+    state.sandboxes.viewers.send(&handle, bytes).await
+}
+
+#[tauri::command]
+pub fn close_sandbox_viewer(state: State<'_, Shared>, viewer: String) {
+    state.sandboxes.viewers.close(&viewer);
+}
+
+/// Docker's own download page for this platform. A fixed URL — the webview
+/// never gets to hand the opener an arbitrary one.
+#[tauri::command]
+pub fn open_docker_download() -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    let url = "https://docs.docker.com/engine/install/";
+    #[cfg(not(target_os = "linux"))]
+    let url = "https://www.docker.com/products/docker-desktop/";
+    tauri_plugin_opener::open_url(url, None::<&str>).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn set_sandbox_tab_visible(app: AppHandle<Wry>, visible: bool) -> Result<(), String> {
+    crate::chrome::set_wide(&app, "sandbox", visible).await
 }
 
 /* ── tailscale sharing ── */

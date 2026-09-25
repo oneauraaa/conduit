@@ -62,7 +62,6 @@ pub struct BrowserManager {
     active_profile_dir: Mutex<Option<PathBuf>>,
     incognito_history: RwLock<Vec<BrowserHistoryEntry>>,
     peers: AsyncRwLock<Vec<Peer<RoleServer>>>,
-    previous_window_size: Mutex<Option<(f64, f64)>>,
 }
 
 impl BrowserManager {
@@ -131,7 +130,6 @@ impl BrowserManager {
             active_profile_dir: Mutex::new(None),
             incognito_history: RwLock::new(Vec::new()),
             peers: AsyncRwLock::new(Vec::new()),
-            previous_window_size: Mutex::new(None),
         })
     }
 
@@ -592,38 +590,7 @@ impl BrowserManager {
         self.tab_visible.store(visible, Ordering::Release);
         self.set_preview(visible && self.state.read().mode == BrowserMode::Headless)
             .await?;
-        let Some(window) = self.app.get_webview_window("main") else {
-            return Ok(());
-        };
-        let scale = window.scale_factor().map_err(|e| e.to_string())?;
-        let current: tauri::LogicalSize<f64> = window
-            .inner_size()
-            .map_err(|e| e.to_string())?
-            .to_logical(scale);
-        let target = if visible {
-            let mut previous = self.previous_window_size.lock();
-            if previous.is_none() {
-                *previous = Some((current.width, current.height));
-            }
-            (1100.0_f64.max(current.width), 760.0_f64.max(current.height))
-        } else {
-            self.previous_window_size
-                .lock()
-                .take()
-                .unwrap_or((current.width, current.height))
-        };
-        let steps = 8;
-        for step in 1..=steps {
-            let progress = step as f64 / steps as f64;
-            let eased = 1.0 - (1.0 - progress).powi(3);
-            let width = current.width + (target.0 - current.width) * eased;
-            let height = current.height + (target.1 - current.height) * eased;
-            window
-                .set_size(tauri::LogicalSize::new(width, height))
-                .map_err(|e| format!("could not resize the Conduit window: {e}"))?;
-            tokio::time::sleep(std::time::Duration::from_millis(18)).await;
-        }
-        Ok(())
+        crate::chrome::set_wide(&self.app, "browser", visible).await
     }
 
     pub async fn set_mode(

@@ -406,6 +406,72 @@ pub fn hide_main(app: &AppHandle<Wry>) {
     }
 }
 
+/* ── wide tabs ── */
+
+struct WideWindow {
+    /// The size to return to once no tab needs the room.
+    previous: Option<(f64, f64)>,
+    /// Tabs currently asking for it — the browser preview, the sandbox view.
+    owners: Vec<&'static str>,
+}
+
+static WIDE: tokio::sync::Mutex<WideWindow> = tokio::sync::Mutex::const_new(WideWindow {
+    previous: None,
+    owners: Vec::new(),
+});
+
+/// Grows the main window while any tab that shows a live screen is open, and
+/// puts it back when the last one closes.
+///
+/// One saved size and one owner list, shared by every such tab: with a slot
+/// each, going from one of them straight to the other could save a size taken
+/// mid-animation as "the size to return to", and the window would never get
+/// back to what the user had. The lock is held across the animation so two
+/// resizes never interleave.
+pub async fn set_wide(app: &AppHandle<Wry>, owner: &'static str, wide: bool) -> Result<(), String> {
+    let mut state = WIDE.lock().await;
+    let was = !state.owners.is_empty();
+    state.owners.retain(|o| *o != owner);
+    if wide {
+        state.owners.push(owner);
+    }
+    let now = !state.owners.is_empty();
+    if was == now {
+        return Ok(());
+    }
+    let Some(window) = app.get_webview_window("main") else {
+        return Ok(());
+    };
+    let scale = window.scale_factor().map_err(|e| e.to_string())?;
+    let current: tauri::LogicalSize<f64> = window
+        .inner_size()
+        .map_err(|e| e.to_string())?
+        .to_logical(scale);
+    let target = if now {
+        if state.previous.is_none() {
+            state.previous = Some((current.width, current.height));
+        }
+        (1100.0_f64.max(current.width), 760.0_f64.max(current.height))
+    } else {
+        state
+            .previous
+            .take()
+            .unwrap_or((current.width, current.height))
+    };
+    let steps = 8;
+    for step in 1..=steps {
+        let progress = step as f64 / steps as f64;
+        let eased = 1.0 - (1.0 - progress).powi(3);
+        let width = current.width + (target.0 - current.width) * eased;
+        let height = current.height + (target.1 - current.height) * eased;
+        window
+            .set_size(tauri::LogicalSize::new(width, height))
+            .map_err(|e| format!("could not resize the Conduit window: {e}"))?;
+        tokio::time::sleep(std::time::Duration::from_millis(18)).await;
+    }
+    Ok(())
+}
+
 /// The Wayland counterpart of the `NSWindow` and `HWND` blocks above.
 ///
 /// ## Why layer-shell

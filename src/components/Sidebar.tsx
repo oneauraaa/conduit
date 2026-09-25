@@ -1,5 +1,5 @@
 import { motion } from "motion/react";
-import { Bot, Globe2, Server, SlidersHorizontal, Wrench, type LucideIcon } from "lucide-react";
+import { Bot, Boxes, Globe2, Server, SlidersHorizontal, Wrench, type LucideIcon } from "lucide-react";
 import { HyprlandIcon } from "./HyprlandIcon";
 import { TailscaleIcon } from "./TailscaleIcon";
 import { cn } from "@/lib/cn";
@@ -8,7 +8,15 @@ import { ThemeToggle } from "./ThemeToggle";
 import { StatusDot } from "./StatusDot";
 import type { ServerStatus } from "@/lib/types";
 
-export type Tab = "server" | "browser" | "tools" | "agents" | "hyprland" | "tailscale" | "settings";
+export type Tab =
+  | "server"
+  | "browser"
+  | "sandbox"
+  | "tools"
+  | "agents"
+  | "hyprland"
+  | "tailscale"
+  | "settings";
 
 /** Tailscale's and Hyprland's marks aren't Lucide icons, so the type allows either. */
 type TabIcon = LucideIcon | ((p: { size?: number; className?: string }) => React.ReactElement);
@@ -16,6 +24,7 @@ type TabIcon = LucideIcon | ((p: { size?: number; className?: string }) => React
 const TABS: { id: Tab; label: string; icon: TabIcon }[] = [
   { id: "server", label: "server", icon: Server },
   { id: "browser", label: "browser", icon: Globe2 },
+  { id: "sandbox", label: "sandbox", icon: Boxes },
   { id: "tools", label: "tools", icon: Wrench },
   { id: "agents", label: "agents", icon: Bot },
   { id: "hyprland", label: "hyprland", icon: HyprlandIcon },

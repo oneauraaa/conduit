@@ -22,7 +22,7 @@
 //! What matters to an agent is not which of the two it gets, but that all of
 //! them agree. They do.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /* ── displays ── */
 
@@ -93,7 +93,9 @@ pub struct Shot {
 
 /* ── accessibility ── */
 
-#[derive(Debug, Clone, Serialize)]
+/// Deserialize too: a sandbox's accessibility tree arrives as JSON in this
+/// same shape and is ranked with [`rank_matches`] like the host's.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Element {
     /// Whatever label the control actually presents: title, value or description.

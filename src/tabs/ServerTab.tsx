@@ -323,6 +323,14 @@ export function ServerTab({ server }: { server: ServerState }) {
                       size={5}
                     />
                     <span className="font-mono text-[11px] font-medium">{e.tool}</span>
+                    {e.target && (
+                      <span
+                        className="shrink-0 rounded-md border hairline bg-[rgb(var(--surface-sunken))] px-1.5 py-px text-[9.5px] text-[rgb(var(--text-dim))]"
+                        title="ran in this sandbox, not on your computer"
+                      >
+                        {e.target}
+                      </span>
+                    )}
                     {e.detail && (
                       <span className="min-w-0 flex-1 truncate text-[10.5px] text-[rgb(var(--text-faint))]">
                         {e.detail}

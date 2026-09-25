@@ -1,8 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import {
   Download,
-  ChevronDown,
   Eye,
   EyeOff,
   FileDown,
@@ -22,6 +21,7 @@ import {
   UserRound,
 } from "lucide-react";
 import { Button, Card, Row, SectionLabel, TabShell } from "@/components/Panel";
+import { Picker } from "@/components/Picker";
 import { Segmented, type SegmentOption } from "@/components/Segmented";
 import { StatusDot } from "@/components/StatusDot";
 import { cn } from "@/lib/cn";
@@ -123,69 +123,16 @@ function ProfilePicker({
   disabled: boolean;
   onSelect: (id: string) => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const root = useRef<HTMLDivElement>(null);
-  const trigger = useRef<HTMLButtonElement>(null);
-  const selected = profiles.find((profile) => profile.id === selectedId);
-
-  useEffect(() => {
-    if (!open) return;
-    const onPointerDown = (event: PointerEvent) => {
-      if (!root.current?.contains(event.target as Node)) setOpen(false);
-    };
-    document.addEventListener("pointerdown", onPointerDown);
-    return () => document.removeEventListener("pointerdown", onPointerDown);
-  }, [open]);
-
-  function moveFocus(event: React.KeyboardEvent<HTMLDivElement>) {
-    if (event.key === "Escape") {
-      setOpen(false);
-      trigger.current?.focus();
-    } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-      event.preventDefault();
-      const options = Array.from(root.current?.querySelectorAll<HTMLButtonElement>('[role="option"]') ?? []);
-      const index = options.indexOf(document.activeElement as HTMLButtonElement);
-      options[(index + (event.key === "ArrowDown" ? 1 : options.length - 1)) % options.length]?.focus();
-    }
-  }
-
   return (
-    <div ref={root} className="relative min-w-0" onKeyDown={moveFocus}>
-      <button
-        ref={trigger}
-        type="button"
-        aria-label="browser profile"
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        disabled={disabled}
-        onClick={() => setOpen((value) => !value)}
-        className="flex w-[112px] items-center justify-between gap-2 rounded-lg border hairline bg-[rgb(var(--surface-sunken))] px-2.5 py-1.5 text-[11px] text-[rgb(var(--text))] transition-colors hover:bg-[rgb(var(--surface))] focus-visible:border-[rgb(var(--accent))] focus-visible:outline-none disabled:opacity-40"
-      >
-        <span className="truncate">{selected?.name ?? "choose profile"}</span>
-        <ChevronDown size={12} className={cn("shrink-0 text-[rgb(var(--text-faint))] transition-transform", open && "rotate-180")} />
-      </button>
-      {open && (
-        <div role="listbox" aria-label="browser profiles" className="absolute top-[calc(100%+5px)] right-0 z-30 min-w-[160px] overflow-hidden rounded-lg border hairline bg-[rgb(var(--surface-raised))] p-1 shadow-[0_6px_14px_rgb(4_18_46/0.3)]">
-          {profiles.map((profile) => (
-            <button
-              key={profile.id}
-              type="button"
-              role="option"
-              aria-selected={profile.id === selectedId}
-              onClick={() => { setOpen(false); onSelect(profile.id); trigger.current?.focus(); }}
-              className={cn(
-                "flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-[11px] focus-visible:outline-none focus-visible:bg-[rgb(var(--accent)/0.12)]",
-                profile.id === selectedId
-                  ? "bg-[rgb(var(--accent)/0.13)] font-medium text-[rgb(var(--accent))]"
-                  : "text-[rgb(var(--text))] hover:bg-[rgb(var(--surface-sunken))]",
-              )}
-            >
-              {profile.name}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
+    <Picker
+      label="browser profile"
+      listLabel="browser profiles"
+      placeholder="choose profile"
+      options={profiles.map((profile) => ({ id: profile.id, label: profile.name }))}
+      selectedId={selectedId}
+      disabled={disabled}
+      onSelect={onSelect}
+    />
   );
 }
 

@@ -11,6 +11,7 @@ import type {
   ControlState,
   HyprlandState,
   Keybind,
+  SandboxesState,
   Readiness,
   ServerState,
   Settings,
@@ -322,10 +323,80 @@ const desktopCfg = isWindows
   : `${home}/Library/Application Support/Claude/claude_desktop_config.json`;
 
 export const agents: AgentTarget[] = [
-  { id: "claude-code", name: "claude code", configPath: `${home}/.claude.json`, detected: true, installed: true, error: null, icon: null },
-  { id: "codex", name: "codex", configPath: `${home}/.codex/config.toml`, detected: true, installed: false, error: null, icon: null },
-  { id: "opencode", name: "opencode", configPath: `${home}/.config/opencode/opencode.jsonc`, detected: true, installed: false, error: null, icon: null },
-  { id: "claude-desktop", name: "claude desktop", configPath: desktopCfg, detected: true, installed: false, error: null, icon: null },
-  { id: "hermes", name: "hermes agent", configPath: `${home}/.hermes/config.yaml`, detected: false, installed: false, error: null, icon: null },
-  { id: "openclaw", name: "openclaw", configPath: `${home}/.openclaw/openclaw.json`, detected: false, installed: false, error: null, icon: null },
+  { id: "claude-code", name: "claude code", configPath: `${home}/.claude.json`, detected: true, installed: true, installedTargets: ["host", "work"], error: null, icon: null },
+  { id: "codex", name: "codex", configPath: `${home}/.codex/config.toml`, detected: true, installed: false, installedTargets: [], error: null, icon: null },
+  { id: "opencode", name: "opencode", configPath: `${home}/.config/opencode/opencode.jsonc`, detected: true, installed: false, installedTargets: [], error: null, icon: null },
+  { id: "claude-desktop", name: "claude desktop", configPath: desktopCfg, detected: true, installed: false, installedTargets: [], error: null, icon: null },
+  { id: "hermes", name: "hermes agent", configPath: `${home}/.hermes/config.yaml`, detected: false, installed: false, installedTargets: [], error: null, icon: null },
+  { id: "openclaw", name: "openclaw", configPath: `${home}/.openclaw/openclaw.json`, detected: false, installed: false, installedTargets: [], error: null, icon: null },
 ];
+
+/**
+ * Two sandboxes in the two states the tab has most to show for: one running
+ * with a live view, one still building its first image. Mutable, so create,
+ * stop and delete can be exercised in `pnpm dev`.
+ */
+export const sandboxes: SandboxesState = {
+  docker: {
+    availability: "ready",
+    cliPath: isWindows
+      ? "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe"
+      : "/usr/local/bin/docker",
+    clientVersion: "27.3.1",
+    serverVersion: "27.3.1",
+    engine: isLinux ? "Ubuntu 24.04 LTS" : "Docker Desktop",
+    arch: "aarch64",
+    cpus: 8,
+    memoryBytes: 8 * 1024 ** 3,
+    hint: null,
+  },
+  sandboxes: [
+    {
+      spec: {
+        id: "work",
+        name: "work",
+        os: "ubuntu-24.04",
+        memoryMb: 4096,
+        cpus: 2,
+        width: 1280,
+        height: 800,
+        internet: true,
+        autoStart: true,
+        createdAt: Date.now() - 1000 * 60 * 60 * 26,
+      },
+      status: "running",
+      error: null,
+      build: null,
+      paused: false,
+      endpoint: "http://127.0.0.1:6767/sandbox/work/mcp",
+      busyCalls: 0,
+    },
+    {
+      spec: {
+        id: "offline-lab",
+        name: "offline lab",
+        os: "debian-12",
+        memoryMb: 2048,
+        cpus: 1,
+        width: 1440,
+        height: 900,
+        internet: false,
+        autoStart: false,
+        createdAt: Date.now() - 1000 * 60 * 4,
+      },
+      status: "building",
+      error: null,
+      build: {
+        os: "debian-12",
+        step: 4,
+        totalSteps: 8,
+        lastLine: "#8 41.2 Unpacking xfce4-panel (4.18.2-1) ...",
+        startedAt: Date.now() - 1000 * 95,
+      },
+      paused: false,
+      endpoint: "http://127.0.0.1:6767/sandbox/offline-lab/mcp",
+      busyCalls: 0,
+    },
+  ],
+  stopOnQuit: true,
+};

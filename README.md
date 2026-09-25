@@ -26,6 +26,9 @@ control pill floats above the Dock, taskbar or panel with a live readout, a mode
 switch and a stop button. Hold **Escape** for 800ms to take control back from
 anywhere.
 
+Or give the agent a [sandbox](#sandboxes) — a Linux desktop in Docker, with its
+own endpoint — and keep your own screen to yourself.
+
 ## Install
 
 Grab the native build for your platform from [Releases](../../releases). No installer.
@@ -131,6 +134,34 @@ Conduit reads the local file.
 Desktop capture is also fully on demand. Conduit never pumps screenshots in the
 background: it opens the platform capture path only while an agent's
 `screenshot` call is running, then tears it down after the first frame.
+
+## Sandboxes
+
+An agent pointed at a sandbox works on a Linux desktop in a Docker container
+instead of on your computer — so you can keep gaming, or typing, while it clicks
+around. The Sandbox tab creates as many as you like, each with its own system
+(Ubuntu 24.04, Ubuntu 22.04 or Debian 12), memory, CPUs and screen size, and
+shows a live view you can watch or take over.
+
+Each sandbox has its own endpoint, and the Agents tab installs it next to this
+computer's, as `conduit-<id>`:
+
+```bash
+claude mcp add --transport http conduit-work http://127.0.0.1:6767/sandbox/work/mcp --scope user
+```
+
+Agents get the same tools under the same names (minus `list_keybinds`), acting
+inside the sandbox: nothing glows, no pill appears, and your pointer, keyboard
+and clipboard are never touched. Approvals don't apply there — it's the agent's
+machine — but the Tools tab's switches, panic stop, and the tab's own "stop
+agent" do.
+
+Sandboxes need Docker Desktop (or Docker Engine on Linux). The first one of each
+system builds its desktop image locally — a few minutes and about 1.6 GB, once.
+A sandbox has no published ports, mounts or extra privileges, and firewall rules
+added at every start keep it from reaching this computer, conduit's own endpoint
+included; turning internet access off leaves it no network at all. See
+[ADR 0002](docs/adr/0002-docker-sandboxes.md).
 
 ## Develop
 
