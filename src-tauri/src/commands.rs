@@ -101,7 +101,15 @@ pub async fn refresh_browser_install(state: State<'_, Shared>) -> Result<Browser
 pub async fn install_browser(state: State<'_, Shared>) -> Result<BrowserState, String> {
     let browser = state.browser.clone();
     browser.clone().install().await?;
+    if state.settings().browser_auto_start {
+        return browser.start(true, None, None).await;
+    }
     Ok(browser.snapshot())
+}
+
+#[tauri::command]
+pub async fn uninstall_browser(state: State<'_, Shared>) -> Result<BrowserState, String> {
+    state.browser.uninstall().await
 }
 
 #[tauri::command]
@@ -242,6 +250,21 @@ pub fn set_start_on_login(
 #[tauri::command]
 pub fn set_start_hidden(state: State<'_, Shared>, hidden: bool) -> Settings {
     state.update_settings(|s| s.start_hidden = hidden)
+}
+
+#[tauri::command]
+pub fn set_browser_auto_start(state: State<'_, Shared>, enabled: bool) -> Settings {
+    state.update_settings(|s| s.browser_auto_start = enabled)
+}
+
+#[tauri::command]
+pub fn set_outline_desktop(state: State<'_, Shared>, enabled: bool) -> Settings {
+    state.update_settings(|s| s.outline_desktop = enabled)
+}
+
+#[tauri::command]
+pub fn set_outline_browser(state: State<'_, Shared>, enabled: bool) -> Settings {
+    state.update_settings(|s| s.outline_browser = enabled)
 }
 
 /// Points the OS's login entry at the current state of the setting.

@@ -44,6 +44,58 @@ pub(crate) async fn refresh_manifest(manager: Arc<BrowserManager>) -> Result<(),
     Ok(())
 }
 
+/// Remove only Conduit's managed runtime. Profiles live beside this folder and
+/// retain their cookies and history for a later reinstall.
+pub(crate) fn remove_runtime(root: &Path) -> Result<(), String> {
+    match fs::symlink_metadata(root) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("could not inspect Chromium runtime: {error}")),
+        Ok(metadata) if !metadata.is_dir() || metadata.file_type().is_symlink() => {
+            return Err("refusing to remove a redirected runtime folder".into());
+        }
+        Ok(_) => {}
+    }
+    let resolved_root = root
+        .canonicalize()
+        .map_err(|e| format!("could not resolve Chromium runtime: {e}"))?;
+    let mut bundles = Vec::new();
+    let mut cache = None;
+    for entry in fs::read_dir(root).map_err(|e| format!("could not list Chromium runtime: {e}"))? {
+        let entry = entry.map_err(|e| format!("could not inspect Chromium runtime: {e}"))?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let path = entry.path();
+        if name == "active" || name == "previous" || name.starts_with("staging-") {
+            require_owned_directory(root, &path)?;
+            bundles.push(path);
+        } else if name == "downloads" {
+            let metadata = fs::symlink_metadata(&path)
+                .map_err(|e| format!("could not inspect Chromium cache: {e}"))?;
+            if !metadata.is_dir() || metadata.file_type().is_symlink() {
+                return Err("refusing to remove a redirected Chromium cache".into());
+            }
+            let resolved_cache = path
+                .canonicalize()
+                .map_err(|e| format!("could not resolve Chromium cache: {e}"))?;
+            if resolved_cache.parent() != Some(resolved_root.as_path()) {
+                return Err("refusing to remove Chromium cache outside the runtime".into());
+            }
+            cache = Some(path);
+        }
+    }
+    if bundles.is_empty() && cache.is_some() {
+        return Err("refusing to remove an unowned Chromium cache".into());
+    }
+    for path in bundles {
+        remove_owned_directory(root, &path)?;
+    }
+    if let Some(path) = cache {
+        fs::remove_dir_all(&path)
+            .map_err(|e| format!("could not remove Chromium cache: {e}"))?;
+    }
+    Ok(())
+}
+
 fn install_blocking(manager: &BrowserManager, cancelled: &AtomicBool) -> Result<(), String> {
     fs::create_dir_all(manager.runtime_root())
         .map_err(|e| format!("could not create runtime folder: {e}"))?;
@@ -715,5 +767,56 @@ mod tests {
         fs::write(owned.join(OWNER_MARKER), "owned").unwrap();
         assert!(remove_owned_directory(&root, &owned).is_ok());
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn uninstall_removes_runtime_but_keeps_sibling_profiles() {
+        let root = std::env::temp_dir().join(format!("conduit-uninstall-{}", crate::random::uuid_v4()));
+        let runtime = root.join("runtime");
+        let active = runtime.join("active");
+        let profiles = root.join("profiles");
+        fs::create_dir_all(&active).unwrap();
+        fs::create_dir_all(runtime.join("downloads")).unwrap();
+        fs::create_dir_all(&profiles).unwrap();
+        fs::write(active.join(OWNER_MARKER), "owned").unwrap();
+        fs::write(active.join("chrome"), "binary").unwrap();
+        fs::write(runtime.join("downloads/archive.zip.part"), "cached").unwrap();
+        fs::write(profiles.join("cookies"), "saved").unwrap();
+
+        remove_runtime(&runtime).unwrap();
+        assert!(!active.exists());
+        assert!(!runtime.join("downloads").exists());
+        assert_eq!(fs::read_to_string(profiles.join("cookies")).unwrap(), "saved");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn uninstall_refuses_unowned_runtime_directory() {
+        let root = std::env::temp_dir().join(format!("conduit-unowned-{}", crate::random::uuid_v4()));
+        fs::create_dir_all(root.join("active")).unwrap();
+        fs::write(root.join("active/chrome"), "unknown").unwrap();
+        assert!(remove_runtime(&root).is_err());
+        assert!(root.join("active/chrome").exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn uninstall_refuses_redirected_cache_before_removing_chromium() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join(format!("conduit-cache-{}", crate::random::uuid_v4()));
+        let outside = std::env::temp_dir().join(format!("conduit-outside-{}", crate::random::uuid_v4()));
+        fs::create_dir_all(root.join("active")).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(root.join("active").join(OWNER_MARKER), "owned").unwrap();
+        fs::write(outside.join("keep"), "private").unwrap();
+        symlink(&outside, root.join("downloads")).unwrap();
+
+        assert!(remove_runtime(&root).is_err());
+        assert!(root.join("active").exists());
+        assert_eq!(fs::read_to_string(outside.join("keep")).unwrap(), "private");
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(outside);
     }
 }

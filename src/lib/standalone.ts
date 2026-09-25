@@ -87,6 +87,9 @@ export const settings: Settings = {
   corsOrigins: [],
   startOnLogin: false,
   startHidden: false,
+  browserAutoStart: true,
+  outlineDesktop: true,
+  outlineBrowser: false,
   browserPermissions: {
     openWebsites: "alwaysAllow",
     readHistory: "alwaysAllow",
@@ -259,6 +262,7 @@ export const control: ControlState = {
   agent: null,
   mode: "auto",
   action: null,
+  browserAction: false,
   stopped: false,
 };
 

@@ -114,6 +114,7 @@ pub fn run() {
             commands::get_browser_state,
             commands::refresh_browser_install,
             commands::install_browser,
+            commands::uninstall_browser,
             commands::cancel_browser_install,
             commands::start_browser,
             commands::stop_browser,
@@ -129,6 +130,9 @@ pub fn run() {
             commands::set_cors_origins,
             commands::set_start_on_login,
             commands::set_start_hidden,
+            commands::set_browser_auto_start,
+            commands::set_outline_desktop,
+            commands::set_outline_browser,
             commands::get_readiness,
             commands::request_accessibility,
             commands::request_screen_recording,
@@ -184,6 +188,15 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 mcp::server::start(boot).await;
             });
+
+            if shared.settings().browser_auto_start && shared.browser.ready() {
+                let browser = shared.browser.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) = browser.start(true, None, None).await {
+                        tracing::warn!(%error, "could not start Chromium at launch");
+                    }
+                });
+            }
 
             // Extracting an app icon takes up to a second, and the Agents tab
             // needs several — warm them now so opening the tab is instant.

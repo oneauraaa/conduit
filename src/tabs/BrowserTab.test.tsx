@@ -63,6 +63,9 @@ function settings(): Settings {
     corsOrigins: [],
     startOnLogin: false,
     startHidden: false,
+    browserAutoStart: true,
+    outlineDesktop: true,
+    outlineBrowser: false,
     browserPermissions: {
       openWebsites: "alwaysAllow",
       readHistory: "alwaysAllow",
@@ -178,5 +181,17 @@ describe("BrowserTab", () => {
     render(<BrowserTab />);
     expect(await screen.findByText("Chromium closed unexpectedly")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "delete browser profile" })).toBeDisabled();
+  });
+
+  it("opens the themed profile picker and selects a profile", async () => {
+    const state = browser();
+    ipc.getBrowserState.mockResolvedValue(state);
+    ipc.selectBrowserProfile.mockResolvedValue({ ...state, selectedProfileId: "incognito" });
+    render(<BrowserTab />);
+    fireEvent.click(await screen.findByRole("button", { name: "browser profile" }));
+    expect(screen.getByRole("listbox", { name: "browser profiles" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("option", { name: "Incognito" }));
+    await waitFor(() => expect(ipc.selectBrowserProfile).toHaveBeenCalledWith("incognito", undefined));
+    expect(screen.getByRole("button", { name: "browser profile" })).toHaveTextContent("Incognito");
   });
 });

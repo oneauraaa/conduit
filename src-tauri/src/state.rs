@@ -151,6 +151,15 @@ pub struct Settings {
     /// appears to do nothing is worse than a window you have to dismiss.
     #[serde(default)]
     pub start_hidden: bool,
+    /// Start an installed Chromium runtime when Conduit launches.
+    #[serde(default = "default_true")]
+    pub browser_auto_start: bool,
+    /// Show the screen edge glow while the agent uses desktop tools.
+    #[serde(default = "default_true")]
+    pub outline_desktop: bool,
+    /// Show the screen edge glow while the agent uses browser tools.
+    #[serde(default)]
+    pub outline_browser: bool,
     /// Browser-specific policy overrides Manual/Auto/Full for these four data
     /// boundaries. Hard tool gates and Panic Stop still win.
     #[serde(default)]
@@ -174,9 +183,16 @@ impl Default for Settings {
             cors_origins: Vec::new(),
             start_on_login: false,
             start_hidden: false,
+            browser_auto_start: true,
+            outline_desktop: true,
+            outline_browser: false,
             browser_permissions: BrowserPermissions::default(),
         }
     }
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Settings {
@@ -227,6 +243,7 @@ pub struct ControlState {
     pub agent: Option<String>,
     pub mode: AccessMode,
     pub action: Option<String>,
+    pub browser_action: bool,
     /// A panic stop is latched: agents are refused until the user hands control
     /// back. Surfaced so the UI can offer that, because otherwise the only way
     /// out is restarting the app — which is exactly the bug this field exists
@@ -429,6 +446,7 @@ impl AppState {
                 agent: None,
                 mode,
                 action: None,
+                browser_action: false,
                 stopped: false,
             }),
             server_cancel: RwLock::new(None),
@@ -523,7 +541,7 @@ impl AppState {
 
     /// Marks an agent as driving and shows the overlay + pill. Idempotent, so
     /// every tool call can call it without thrashing the windows.
-    pub fn begin_control(&self, agent: Option<String>, action: &str) {
+    pub fn begin_control(&self, agent: Option<String>, action: &str, browser_action: bool) {
         let was_idle = self.control.read().phase == ControlPhase::Idle;
         if was_idle {
             // Note: this does *not* clear `aborted`. The gate refuses a
@@ -537,6 +555,7 @@ impl AppState {
                 c.agent = agent.clone();
                 c.mode = mode;
                 c.action = Some(action.to_string());
+                c.browser_action = browser_action;
             });
             crate::chrome::show_control_chrome(&self.app, next);
         } else {
@@ -545,6 +564,7 @@ impl AppState {
                     c.agent = agent.clone();
                 }
                 c.action = Some(action.to_string());
+                c.browser_action = browser_action;
             });
         }
     }
@@ -560,6 +580,7 @@ impl AppState {
             c.phase = ControlPhase::Idle;
             c.agent = None;
             c.action = None;
+            c.browser_action = false;
         });
         let _ = self.app.emit("control:approval", Option::<PendingApproval>::None);
         crate::chrome::hide_control_chrome(&self.app);
@@ -719,6 +740,19 @@ pub fn catalog_for_ui(browser_ready: bool) -> Vec<catalog::ToolDef> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn older_settings_get_browser_and_outline_defaults() {
+        let mut saved = serde_json::to_value(Settings::default()).unwrap();
+        let object = saved.as_object_mut().unwrap();
+        object.remove("browserAutoStart");
+        object.remove("outlineDesktop");
+        object.remove("outlineBrowser");
+        let loaded: Settings = serde_json::from_value(saved).unwrap();
+        assert!(loaded.browser_auto_start);
+        assert!(loaded.outline_desktop);
+        assert!(!loaded.outline_browser);
+    }
 
     /// The UI reads these keys by name. A mismatch is invisible on the Rust
     /// side and surfaces as `undefined` in TypeScript, which is falsy — so the

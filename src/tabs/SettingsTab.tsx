@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import {
   Globe,
+  Monitor,
   PanelBottom,
+  PanelsTopLeft,
   Plus,
   Power,
   ShieldAlert,
@@ -13,13 +15,18 @@ import { Button, Card, Row, SectionLabel, TabShell } from "@/components/Panel";
 import { Switch } from "@/components/Switch";
 import {
   getSettings,
+  getBrowserState,
+  setBrowserAutoStart,
   setCorsEnabled,
   setCorsOrigins,
+  setOutlineBrowser,
+  setOutlineDesktop,
   setStartHidden,
   setStartOnLogin,
   subscribe,
+  uninstallBrowser,
 } from "@/lib/ipc";
-import type { Settings } from "@/lib/types";
+import type { BrowserState, Settings } from "@/lib/types";
 import { cn } from "@/lib/cn";
 
 /**
@@ -55,19 +62,27 @@ function validate(raw: string, existing: string[]): string | null {
 
 export function SettingsTab() {
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [browser, setBrowser] = useState<BrowserState | null>(null);
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
+  const [browserError, setBrowserError] = useState<string | null>(null);
+  const [removingBrowser, setRemovingBrowser] = useState(false);
 
   useEffect(() => {
     void getSettings().then(setSettings).catch(() => {});
-    return subscribe("settings:changed", setSettings);
+    void getBrowserState().then(setBrowser).catch((reason) => setBrowserError(String(reason)));
+    const offSettings = subscribe("settings:changed", setSettings);
+    const offBrowser = subscribe("browser:state", setBrowser);
+    return () => { offSettings(); offBrowser(); };
   }, []);
 
   const origins = useMemo(() => settings?.corsOrigins ?? [], [settings]);
   const enabled = settings?.corsEnabled ?? false;
   const startOnLogin = settings?.startOnLogin ?? false;
   const startHidden = settings?.startHidden ?? false;
+  const browserInstalled = browser?.install.installedRevision != null;
+  const browserInstalling = browser != null && ["downloading", "verifying", "installing"].includes(browser.install.status);
 
   async function toggleStartOnLogin(next: boolean) {
     try {
@@ -82,6 +97,28 @@ export function SettingsTab() {
 
   async function toggleStartHidden(next: boolean) {
     setSettings(await setStartHidden(next));
+  }
+
+  async function updateBrowserSetting(update: () => Promise<Settings>) {
+    try {
+      setSettings(await update());
+      setBrowserError(null);
+    } catch (reason) {
+      setBrowserError(String(reason));
+    }
+  }
+
+  async function removeBrowser() {
+    if (!window.confirm("Uninstall Chromium and its browser runtime? Saved browser profiles and downloads will stay on this computer.")) return;
+    setRemovingBrowser(true);
+    setBrowserError(null);
+    try {
+      setBrowser(await uninstallBrowser());
+    } catch (reason) {
+      setBrowserError(String(reason));
+    } finally {
+      setRemovingBrowser(false);
+    }
   }
 
   async function toggle(next: boolean) {
@@ -156,6 +193,65 @@ export function SettingsTab() {
             )}
           </AnimatePresence>
         </Card>
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <SectionLabel>agent outline</SectionLabel>
+        <Card>
+          <Row
+            icon={<Monitor size={15} />}
+            title="desktop actions"
+            description="show the screen edge outline while an agent uses desktop tools"
+          >
+            <Switch
+              checked={settings?.outlineDesktop ?? true}
+              onChange={(enabled) => void updateBrowserSetting(() => setOutlineDesktop(enabled))}
+              label="show outline for desktop actions"
+            />
+          </Row>
+          <Row
+            icon={<PanelsTopLeft size={15} />}
+            title="browser actions"
+            description="show the outline while an agent uses the built-in browser"
+          >
+            <Switch
+              checked={settings?.outlineBrowser ?? false}
+              onChange={(enabled) => void updateBrowserSetting(() => setOutlineBrowser(enabled))}
+              label="show outline for browser actions"
+            />
+          </Row>
+        </Card>
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <SectionLabel>browser runtime</SectionLabel>
+        <Card>
+          <Row
+            icon={<Power size={15} />}
+            title="start Chromium with Conduit"
+            description="automatically open an installed browser when Conduit launches"
+          >
+            <Switch
+              checked={settings?.browserAutoStart ?? true}
+              onChange={(enabled) => void updateBrowserSetting(() => setBrowserAutoStart(enabled))}
+              label="start Chromium with Conduit"
+            />
+          </Row>
+          <Row
+            icon={<Trash2 size={15} />}
+            title="uninstall Chromium"
+            description={browserInstalled ? "remove the browser runtime; profiles and saved downloads stay" : "Chromium is not installed"}
+          >
+            <Button
+              variant="danger"
+              disabled={!browserInstalled || browserInstalling || removingBrowser}
+              onClick={() => void removeBrowser()}
+            >
+              {removingBrowser ? "removing…" : "uninstall"}
+            </Button>
+          </Row>
+        </Card>
+        {browserError && <p role="alert" className="px-1 text-[11px] text-red-500">{browserError}</p>}
       </div>
 
       {/* One setting, not two. The allowlist is the *body* of "allow browser

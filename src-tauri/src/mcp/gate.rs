@@ -96,7 +96,7 @@ where
     // The session becomes "active" the moment an agent reaches for anything —
     // including reads. Watching the screen is exactly when the user most wants
     // to see the glow.
-    state.begin_control(ctx.agent.clone(), catalog::action_label(tool));
+    state.begin_control(ctx.agent.clone(), catalog::action_label(tool), tool.starts_with("browser_"));
     state.touch();
     let _active_call = state.track_active_call();
 
@@ -191,7 +191,7 @@ where
     Fut: std::future::Future<Output = Result<CallToolResult, McpError>>,
 {
     browser_hard_gate(state, ctx.tool)?;
-    state.begin_control(ctx.agent.clone(), catalog::action_label(ctx.tool));
+    state.begin_control(ctx.agent.clone(), catalog::action_label(ctx.tool), true);
     state.touch();
     let _active_call = state.track_active_call();
     if !approve_browser_category(state, category, ctx.detail.clone(), ctx.agent.clone()).await {
@@ -235,7 +235,7 @@ where
     Fut: std::future::Future<Output = Result<CallToolResult, McpError>>,
 {
     browser_hard_gate(state, ctx.tool)?;
-    state.begin_control(ctx.agent.clone(), catalog::action_label(ctx.tool));
+    state.begin_control(ctx.agent.clone(), catalog::action_label(ctx.tool), true);
     state.touch();
     let _active_call = state.track_active_call();
     let started = Instant::now();
@@ -297,7 +297,7 @@ pub async fn approve_browser_category(
     ) {
         return true;
     }
-    state.begin_control(agent.clone(), browser_action_label(category));
+    state.begin_control(agent.clone(), browser_action_label(category), true);
     state.touch();
     let id = state.next_id("approval");
     let request = PendingApproval {

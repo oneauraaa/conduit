@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import {
   Download,
+  ChevronDown,
   Eye,
   EyeOff,
   FileDown,
@@ -44,6 +45,7 @@ import {
 } from "@/lib/ipc";
 import type {
   BrowserMode,
+  BrowserProfile,
   BrowserPermissionCategory,
   BrowserPermissionMode,
   BrowserRestartStrategy,
@@ -108,6 +110,83 @@ function formatBytes(value: number | null): string {
     unit = units[index];
   }
   return `${amount.toFixed(amount >= 10 ? 0 : 1)} ${unit}`;
+}
+
+function ProfilePicker({
+  profiles,
+  selectedId,
+  disabled,
+  onSelect,
+}: {
+  profiles: BrowserProfile[];
+  selectedId: string;
+  disabled: boolean;
+  onSelect: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const selected = profiles.find((profile) => profile.id === selectedId);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!root.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [open]);
+
+  function moveFocus(event: React.KeyboardEvent<HTMLDivElement>) {
+    if (event.key === "Escape") {
+      setOpen(false);
+      trigger.current?.focus();
+    } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const options = Array.from(root.current?.querySelectorAll<HTMLButtonElement>('[role="option"]') ?? []);
+      const index = options.indexOf(document.activeElement as HTMLButtonElement);
+      options[(index + (event.key === "ArrowDown" ? 1 : options.length - 1)) % options.length]?.focus();
+    }
+  }
+
+  return (
+    <div ref={root} className="relative min-w-0" onKeyDown={moveFocus}>
+      <button
+        ref={trigger}
+        type="button"
+        aria-label="browser profile"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        disabled={disabled}
+        onClick={() => setOpen((value) => !value)}
+        className="flex w-[112px] items-center justify-between gap-2 rounded-lg border hairline bg-[rgb(var(--surface-sunken))] px-2.5 py-1.5 text-[11px] text-[rgb(var(--text))] transition-colors hover:bg-[rgb(var(--surface))] focus-visible:border-[rgb(var(--accent))] focus-visible:outline-none disabled:opacity-40"
+      >
+        <span className="truncate">{selected?.name ?? "choose profile"}</span>
+        <ChevronDown size={12} className={cn("shrink-0 text-[rgb(var(--text-faint))] transition-transform", open && "rotate-180")} />
+      </button>
+      {open && (
+        <div role="listbox" aria-label="browser profiles" className="absolute top-[calc(100%+5px)] right-0 z-30 min-w-[160px] overflow-hidden rounded-lg border hairline bg-[rgb(var(--surface-raised))] p-1 shadow-[0_6px_14px_rgb(4_18_46/0.3)]">
+          {profiles.map((profile) => (
+            <button
+              key={profile.id}
+              type="button"
+              role="option"
+              aria-selected={profile.id === selectedId}
+              onClick={() => { setOpen(false); onSelect(profile.id); trigger.current?.focus(); }}
+              className={cn(
+                "flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-[11px] focus-visible:outline-none focus-visible:bg-[rgb(var(--accent)/0.12)]",
+                profile.id === selectedId
+                  ? "bg-[rgb(var(--accent)/0.13)] font-medium text-[rgb(var(--accent))]"
+                  : "text-[rgb(var(--text))] hover:bg-[rgb(var(--surface-sunken))]",
+              )}
+            >
+              {profile.name}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function DownloadPanel({ browser }: { browser: BrowserState }) {
@@ -504,7 +583,7 @@ export function BrowserTab() {
         <div className="flex min-w-0 flex-col gap-4">
           <div className="flex flex-col gap-2">
             <SectionLabel>runtime</SectionLabel>
-            <Card>
+            <Card className="!overflow-visible">
               <Row title="window mode" description="headless previews here; visible opens a window">
                 <Segmented
                   value={browser.mode}
@@ -518,17 +597,12 @@ export function BrowserTab() {
                 title="profile"
                 description={selectedProfile?.incognito ? "deleted whenever Chromium stops" : "cookies and sessions persist"}
               >
-                <select
-                  aria-label="browser profile"
-                  value={browser.selectedProfileId}
+                <ProfilePicker
+                  profiles={browser.profiles}
+                  selectedId={browser.selectedProfileId}
                   disabled={runtimeTransitioning}
-                  onChange={(event) => requestChange({ kind: "profile", value: event.target.value })}
-                  className="max-w-[130px] rounded-lg border hairline bg-[rgb(var(--surface))] px-2 py-1.5 text-[11px] outline-none"
-                >
-                  {browser.profiles.map((profile) => (
-                    <option key={profile.id} value={profile.id}>{profile.name}</option>
-                  ))}
-                </select>
+                  onSelect={(value) => requestChange({ kind: "profile", value })}
+                />
                 <button
                   type="button"
                   aria-label="create browser profile"

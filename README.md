@@ -109,6 +109,11 @@ while the Browser tab is visible. Visible mode opens a normal Chromium window.
 Profiles keep cookies, sessions, and Conduit-recorded navigation history;
 Incognito data is removed whenever Chromium stops.
 
+An installed Chromium starts with Conduit by default. Settings can turn that
+off, choose whether the screen edge outline appears during desktop or browser
+actions, and uninstall the managed Chromium runtime. Uninstalling keeps browser
+profiles and saved website downloads for a later reinstall.
+
 Four Browser-tab policies override Manual/Auto/Full for their own boundaries:
 
 | browser permission | default |

@@ -167,7 +167,31 @@ impl BrowserManager {
     }
 
     pub async fn install(self: Arc<Self>) -> Result<(), String> {
-        install::install(self).await
+        let _lifecycle = self.lifecycle.lock().await;
+        install::install(self.clone()).await
+    }
+
+    pub async fn uninstall(&self) -> Result<BrowserState, String> {
+        let _lifecycle = self.lifecycle.lock().await;
+        if self.install_cancel.lock().is_some() {
+            return Err("wait for the Chromium download to finish or cancel it first".into());
+        }
+        if let Some(process) = self.process.lock().await.clone() {
+            process.kill().await;
+        }
+        self.stop_inner(true).await;
+        let was_ready = self.ready();
+        let runtime_root = self.runtime_root.clone();
+        let result = tokio::task::spawn_blocking(move || install::remove_runtime(&runtime_root))
+            .await
+            .map_err(|error| format!("browser removal failed to run: {error}"))?;
+        self.state.write().install = installed_runtime(&self.root).0;
+        self.emit();
+        if was_ready != self.ready() {
+            self.notify_tool_list_changed().await;
+        }
+        result?;
+        Ok(self.snapshot())
     }
 
     pub async fn refresh_install_metadata(self: Arc<Self>) -> Result<BrowserState, String> {

@@ -64,6 +64,9 @@ export interface Settings {
   startOnLogin: boolean;
   /** When launched at login, go to the tray instead of showing the window. */
   startHidden: boolean;
+  browserAutoStart: boolean;
+  outlineDesktop: boolean;
+  outlineBrowser: boolean;
   browserPermissions: BrowserPermissions;
 }
 
@@ -311,6 +314,8 @@ export interface ControlState {
   mode: AccessMode;
   /** Human-readable current action, e.g. "clicking". */
   action: string | null;
+  /** Whether the latest agent action uses the built-in browser. */
+  browserAction: boolean;
   /**
    * A panic stop is latched. Every tool stays refused until the user hands
    * control back — the stop button is not meant to be undone by an agent that

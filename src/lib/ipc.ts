@@ -49,9 +49,18 @@ const local: Record<string, (args: Record<string, unknown>) => unknown> = {
     standalone.browser.install.installedRevision = standalone.browser.install.expectedRevision;
     standalone.browser.install.downloadedBytes = standalone.browser.install.totalBytes ?? 0;
     standalone.browser.install.error = null;
+    if (standalone.settings.browserAutoStart) standalone.browser.runStatus = "running";
     return { ...standalone.browser };
   },
   cancel_browser_install: () => undefined,
+  uninstall_browser: () => {
+    standalone.browser.install.status = "unavailable";
+    standalone.browser.install.installedRevision = null;
+    standalone.browser.runStatus = "stopped";
+    standalone.browser.stopLatched = true;
+    standalone.browser.tabs = [];
+    return { ...standalone.browser };
+  },
   start_browser: () => {
     standalone.browser.runStatus = "running";
     standalone.browser.stopLatched = false;
@@ -113,6 +122,18 @@ const local: Record<string, (args: Record<string, unknown>) => unknown> = {
     standalone.settings.startHidden = a.hidden as boolean;
     return { ...standalone.settings };
   },
+  set_browser_auto_start: (a) => {
+    standalone.settings.browserAutoStart = a.enabled as boolean;
+    return { ...standalone.settings };
+  },
+  set_outline_desktop: (a) => {
+    standalone.settings.outlineDesktop = a.enabled as boolean;
+    return { ...standalone.settings };
+  },
+  set_outline_browser: (a) => {
+    standalone.settings.outlineBrowser = a.enabled as boolean;
+    return { ...standalone.settings };
+  },
   get_readiness: () => standalone.readiness,
   get_control_state: () => standalone.control,
   set_session_mode: (a) => ({ ...standalone.control, mode: a.mode }),
@@ -165,6 +186,7 @@ export const setToolEnabled = (tool: string, enabled: boolean) =>
 export const getBrowserState = () => invoke<BrowserState>("get_browser_state");
 export const refreshBrowserInstall = () => invoke<BrowserState>("refresh_browser_install");
 export const installBrowser = () => invoke<BrowserState>("install_browser");
+export const uninstallBrowser = () => invoke<BrowserState>("uninstall_browser");
 export const cancelBrowserInstall = () => invoke<void>("cancel_browser_install");
 export const startBrowser = () => invoke<BrowserState>("start_browser");
 export const stopBrowser = () => invoke<BrowserState>("stop_browser");
@@ -202,6 +224,12 @@ export const setStartOnLogin = (enabled: boolean) =>
   invoke<Settings>("set_start_on_login", { enabled });
 export const setStartHidden = (hidden: boolean) =>
   invoke<Settings>("set_start_hidden", { hidden });
+export const setBrowserAutoStart = (enabled: boolean) =>
+  invoke<Settings>("set_browser_auto_start", { enabled });
+export const setOutlineDesktop = (enabled: boolean) =>
+  invoke<Settings>("set_outline_desktop", { enabled });
+export const setOutlineBrowser = (enabled: boolean) =>
+  invoke<Settings>("set_outline_browser", { enabled });
 
 /* ── readiness ──────────────────────────────────────────────── */
 

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { getControlState, subscribe } from "@/lib/ipc";
+import { getControlState, getSettings, subscribe } from "@/lib/ipc";
+import type { ControlState, Settings } from "@/lib/types";
 import { isStandalone } from "@/lib/standalone";
 import { AiCursor } from "./AiCursor";
 
@@ -25,7 +26,12 @@ const demo =
  * CSS as a third line of defence.
  */
 export function Overlay() {
-  const [active, setActive] = useState(demo);
+  const [control, setControl] = useState<ControlState | null>(null);
+  const [settings, setSettings] = useState<Settings | null>(null);
+  const active = demo || control?.phase === "active";
+  const showOutline = demo || (active && (control?.browserAction
+    ? settings?.outlineBrowser ?? false
+    : settings?.outlineDesktop ?? true));
   const mounted = useRef(false);
 
   useEffect(() => {
@@ -33,13 +39,14 @@ export function Overlay() {
     mounted.current = true;
     // Pull the current state as well as subscribing: this webview is created
     // hidden at startup and may come up after a session has already begun.
-    void getControlState()
-      .then((s) => setActive(s.phase === "active"))
-      .catch(() => {});
-    const off = subscribe("control:state", (s) => setActive(s.phase === "active"));
+    void getControlState().then(setControl).catch(() => {});
+    void getSettings().then(setSettings).catch(() => {});
+    const off = subscribe("control:state", setControl);
+    const offSettings = subscribe("settings:changed", setSettings);
     return () => {
       mounted.current = false;
       off();
+      offSettings();
     };
   }, []);
 
@@ -48,7 +55,7 @@ export function Overlay() {
       {demo && <DemoDesktop />}
 
       <AnimatePresence initial={!demo}>
-        {active && (
+        {showOutline && (
           <motion.div
             key="glow"
             initial={{ opacity: 0 }}
