@@ -16,6 +16,7 @@ import { Switch } from "@/components/Switch";
 import {
   disableRemote,
   enableRemote,
+  enableRemoteWithPassword,
   getTailscaleState,
   regenerateRemoteToken,
   subscribe,
@@ -41,6 +42,9 @@ export function TailscaleTab() {
   const [ts, setTs] = useState<TailscaleState | null>(null);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [password, setPassword] = useState("");
+  const [authError, setAuthError] = useState<string | null>(null);
 
   useEffect(() => {
     void getTailscaleState()
@@ -54,9 +58,31 @@ export function TailscaleTab() {
     try {
       setTs(next ? await enableRemote() : await disableRemote());
     } catch (e) {
-      setTs((prev) =>
-        prev ? { ...prev, error: String(e), sharing: false } : prev,
-      );
+      if (next && String(e).includes("TAILSCALE_OPERATOR_REQUIRED")) {
+        setAuthError(null);
+        setShowPassword(true);
+      } else {
+        setTs((prev) =>
+          prev ? { ...prev, error: String(e), sharing: false } : prev,
+        );
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function enableWithPassword(event: React.FormEvent) {
+    event.preventDefault();
+    if (!password || busy) return;
+    const secret = password;
+    setPassword("");
+    setBusy(true);
+    setAuthError(null);
+    try {
+      setTs(await enableRemoteWithPassword(secret));
+      setShowPassword(false);
+    } catch (error) {
+      setAuthError(String(error));
     } finally {
       setBusy(false);
     }
@@ -191,6 +217,46 @@ export function TailscaleTab() {
           </Row>
         </Card>
       </div>
+      {showPassword && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 p-4">
+          <form
+            role="dialog"
+            aria-modal="true"
+            aria-label="Allow Tailscale Funnel"
+            onSubmit={(event) => void enableWithPassword(event)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape" && !busy) {
+                setPassword("");
+                setShowPassword(false);
+              }
+            }}
+            className="w-full max-w-sm rounded-2xl border hairline bg-[rgb(var(--surface-raised))] p-5 shadow-2xl"
+          >
+            <h2 className="text-sm font-semibold">allow Tailscale Funnel</h2>
+            <p className="mt-2 text-xs leading-relaxed text-[rgb(var(--text-dim))]">
+              Tailscale needs your Linux password once to let your account manage Funnel.
+              Conduit sends it only to sudo and does not save it.
+            </p>
+            <label className="mt-4 block text-xs" htmlFor="tailscale-password">Linux password</label>
+            <input
+              id="tailscale-password"
+              type="password"
+              autoComplete="current-password"
+              autoFocus
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              className="mt-1 w-full rounded-lg border hairline bg-[rgb(var(--surface-sunken))] px-3 py-2 text-sm outline-none focus:border-[rgb(var(--accent))]"
+            />
+            {authError && <p role="alert" className="mt-2 text-xs text-amber-400">{authError}</p>}
+            <div className="mt-5 flex justify-end gap-2">
+              <Button onClick={() => { setPassword(""); setShowPassword(false); }} disabled={busy}>cancel</Button>
+              <button type="submit" disabled={busy || !password} className="conduit-gradient rounded-lg px-2.5 py-1.5 text-xs font-medium text-white disabled:opacity-40">
+                {busy ? "enabling…" : "enable Funnel"}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </TabShell>
   );
 }

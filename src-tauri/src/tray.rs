@@ -73,6 +73,8 @@ pub fn build(app: &AppHandle<Wry>) -> tauri::Result<()> {
                 if let Some(cancel) = state.server_cancel.write().take() {
                     cancel.cancel();
                 }
+                // Fire-and-forget: the stops finish after conduit has gone.
+                state.sandboxes.stop_all_detached();
                 crate::platform::input::show_system_cursor();
                 app.exit(0);
             }

@@ -255,6 +255,128 @@ where
     result
 }
 
+/* ── sandboxes ── */
+
+pub struct SandboxCtx {
+    pub sandbox: String,
+    pub tool: &'static str,
+    pub detail: Option<String>,
+    pub agent: Option<String>,
+    /// Where the pointer is headed, when the call says — drawn as a pulse on
+    /// the Sandbox tab's live view.
+    pub point: Option<(f64, f64)>,
+}
+
+/// Why a sandbox call may not run, or `None` if policy allows it. The global
+/// panic latch and the Tools tab both reach into sandboxes; the Manual/Auto
+/// approval mode does not, because a sandbox is the place an agent is meant to
+/// act without asking (the Sandbox tab says so).
+pub(crate) fn sandbox_refusal(
+    aborted: bool,
+    tool_enabled: bool,
+    tools_access: crate::state::ToolsAccess,
+) -> Option<&'static str> {
+    if aborted {
+        return Some(
+            "conduit: the user stopped control. retrying will not help — they have to hand it \
+             back from conduit's window before any tool works again. ask them to.",
+        );
+    }
+    if !tool_enabled {
+        return Some(match tools_access {
+            crate::state::ToolsAccess::Off => {
+                "conduit: all tools are switched off in the Tools tab."
+            }
+            _ => "conduit: this tool is switched off in the Tools tab.",
+        });
+    }
+    None
+}
+
+/// The gate for a tool call into a sandbox.
+///
+/// Deliberately never touches the host's control session: no glow, no pill,
+/// no AI cursor, no approval card on the user's screen — the reason sandboxes
+/// exist is to leave that screen alone. Calls are still logged, still stopped
+/// by panic stop, and cancelled by the Sandbox tab's "stop agent".
+pub async fn run_sandbox<F, Fut>(
+    state: &Shared,
+    ctx: SandboxCtx,
+    f: F,
+) -> Result<CallToolResult, McpError>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<CallToolResult, McpError>>,
+{
+    let started = Instant::now();
+    let tool = ctx.tool;
+    let target = Some(ctx.sandbox.clone());
+    let activity = |outcome: &'static str| crate::sandbox::model::SandboxActivity {
+        sandbox_id: ctx.sandbox.clone(),
+        tool: tool.to_string(),
+        action: catalog::action_label(tool).to_string(),
+        agent: ctx.agent.clone(),
+        detail: ctx.detail.clone(),
+        outcome,
+        x: ctx.point.map(|p| p.0),
+        y: ctx.point.map(|p| p.1),
+        at: crate::state::now_millis(),
+    };
+    let refuse = |why: String| {
+        state.log_call_for(target.clone(), tool, ctx.agent.clone(), "blocked", Some(why.clone()), None);
+        state.sandboxes.emit_activity(activity("blocked"));
+        Err(McpError::invalid_request(why, None))
+    };
+
+    let settings = state.settings();
+    if let Some(why) = sandbox_refusal(
+        state.is_aborted(),
+        settings.tool_enabled(tool),
+        settings.tools_access,
+    ) {
+        return refuse(why.to_string());
+    }
+
+    let guard = match state.sandboxes.begin_call(&ctx.sandbox).await {
+        Ok(guard) => guard,
+        Err(why) => return refuse(format!("conduit: {why}")),
+    };
+    // A panic stop can land while the sandbox was starting on demand.
+    if state.is_aborted() {
+        return refuse("conduit: control was stopped by the user.".into());
+    }
+    state.sandboxes.emit_activity(activity("running"));
+
+    let result = tokio::select! {
+        result = f() => result,
+        _ = guard.cancel.cancelled() => Err(McpError::invalid_request(
+            "conduit: the user stopped the agent in this sandbox.",
+            None,
+        )),
+    };
+    drop(guard);
+
+    let ms = Some(started.elapsed().as_millis() as u64);
+    match &result {
+        Ok(_) => {
+            state.log_call_for(target, tool, ctx.agent.clone(), "ok", ctx.detail.clone(), ms);
+            state.sandboxes.emit_activity(activity("ok"));
+        }
+        Err(e) => {
+            state.log_call_for(
+                target,
+                tool,
+                ctx.agent.clone(),
+                "error",
+                Some(e.message.to_string()),
+                ms,
+            );
+            state.sandboxes.emit_activity(activity("error"));
+        }
+    }
+    result
+}
+
 pub(crate) fn browser_hard_gate(state: &Shared, tool: &str) -> Result<(), McpError> {
     if state.is_aborted() {
         return Err(McpError::invalid_request(
@@ -387,6 +509,23 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The panic latch and the Tools tab reach into sandboxes; nothing else in
+    /// this function may refuse.
+    #[test]
+    fn sandbox_calls_answer_to_panic_stop_and_the_tools_tab_only() {
+        use crate::state::ToolsAccess;
+        for access in [ToolsAccess::All, ToolsAccess::Custom, ToolsAccess::Off] {
+            assert!(sandbox_refusal(true, true, access).is_some(), "panic stop must win");
+            assert!(sandbox_refusal(true, false, access).is_some());
+        }
+        assert!(sandbox_refusal(false, true, ToolsAccess::All).is_none());
+        assert!(sandbox_refusal(false, true, ToolsAccess::Custom).is_none());
+        let off = sandbox_refusal(false, false, ToolsAccess::Off).unwrap();
+        assert!(off.contains("all tools"), "{off}");
+        let one = sandbox_refusal(false, false, ToolsAccess::Custom).unwrap();
+        assert!(one.contains("this tool"), "{one}");
     }
 
     #[test]

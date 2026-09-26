@@ -198,17 +198,17 @@ pub struct WebSearchArgs {
 
 /* ── helpers ────────────────────────────────────────────────── */
 
-fn ok(text: impl Into<String>) -> Result<CallToolResult, McpError> {
+pub(crate) fn ok(text: impl Into<String>) -> Result<CallToolResult, McpError> {
     Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
 }
 
-fn json_ok<T: serde::Serialize>(value: &T) -> Result<CallToolResult, McpError> {
+pub(crate) fn json_ok<T: serde::Serialize>(value: &T) -> Result<CallToolResult, McpError> {
     let text = serde_json::to_string_pretty(value)
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
     ok(text)
 }
 
-fn fail(msg: impl Into<String>) -> McpError {
+pub(crate) fn fail(msg: impl Into<String>) -> McpError {
     McpError::internal_error(msg.into(), None)
 }
 
@@ -243,7 +243,7 @@ fn input_delivered() -> Result<(), McpError> {
     }
 }
 
-fn parse_button(s: Option<&str>) -> Button {
+pub(crate) fn parse_button(s: Option<&str>) -> Button {
     match s.map(|b| b.to_ascii_lowercase()).as_deref() {
         Some("right") => Button::Right,
         Some("middle") => Button::Middle,
@@ -385,7 +385,7 @@ impl Drop for Conduit {
 }
 
 /// Turns an MCP client id into something worth showing a human.
-fn pretty_agent(raw: &str) -> String {
+pub(crate) fn pretty_agent(raw: &str) -> String {
     let lower = raw.to_ascii_lowercase();
     if lower.contains("claude-code") || lower.contains("claude code") {
         "claude code".into()

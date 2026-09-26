@@ -4,6 +4,7 @@ import { Sidebar, type Tab } from "@/components/Sidebar";
 import { TitleBar } from "@/components/TitleBar";
 import { ServerTab } from "@/tabs/ServerTab";
 import { BrowserTab } from "@/tabs/BrowserTab";
+import { SandboxTab } from "@/tabs/SandboxTab";
 import { ToolsTab } from "@/tabs/ToolsTab";
 import { AgentsTab } from "@/tabs/AgentsTab";
 import { HyprlandTab } from "@/tabs/HyprlandTab";
@@ -30,6 +31,7 @@ function initialTab(): Tab {
   const t = new URLSearchParams(window.location.search).get("tab");
   return t === "tools" ||
     t === "browser" ||
+    t === "sandbox" ||
     t === "agents" ||
     t === "hyprland" ||
     t === "tailscale" ||
@@ -42,6 +44,14 @@ export default function App() {
   const [tab, setTab] = useState<Tab>(initialTab);
   const [server, setServer] = useState<ServerState>(INITIAL_SERVER);
   const [hyprland, setHyprland] = useState<HyprlandState | null>(null);
+  // Set by the Sandbox tab's "connect an agent", so the Agents tab opens with
+  // that sandbox already chosen as the install target.
+  const [agentTarget, setAgentTarget] = useState<string | null>(null);
+
+  function openTab(next: Tab) {
+    if (next !== "agents") setAgentTarget(null);
+    setTab(next);
+  }
 
   useEffect(() => {
     void getServerState().then(setServer).catch(() => {});
@@ -60,7 +70,7 @@ export default function App() {
       <TitleBar />
       <Sidebar
         tab={tab}
-        onTab={setTab}
+        onTab={openTab}
         serverStatus={server.status}
         disabled={{ hyprland: !hyprland?.available }}
       />
@@ -77,8 +87,16 @@ export default function App() {
           >
             {tab === "server" && <ServerTab server={server} />}
             {tab === "browser" && <BrowserTab />}
+            {tab === "sandbox" && (
+              <SandboxTab
+                onConnectAgent={(id) => {
+                  setAgentTarget(id);
+                  setTab("agents");
+                }}
+              />
+            )}
             {tab === "tools" && <ToolsTab />}
-            {tab === "agents" && <AgentsTab server={server} />}
+            {tab === "agents" && <AgentsTab server={server} initialTarget={agentTarget} />}
             {tab === "hyprland" && <HyprlandTab />}
             {tab === "tailscale" && <TailscaleTab />}
             {tab === "settings" && <SettingsTab />}

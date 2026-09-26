@@ -3,23 +3,55 @@ import { AnimatePresence, motion } from "motion/react";
 import { Check, Download, Loader2, Trash2, TriangleAlert } from "lucide-react";
 import { AgentMark } from "@/components/AgentMark";
 import { Button, Card, Row, SectionLabel, TabShell } from "@/components/Panel";
-import { installAgent, listAgents, subscribe, uninstallAgent } from "@/lib/ipc";
-import type { AgentTarget, ServerState } from "@/lib/types";
+import { Picker, type PickerOption } from "@/components/Picker";
+import { getSandboxState, installAgent, listAgents, subscribe, uninstallAgent } from "@/lib/ipc";
+import type { AgentTarget, SandboxView, ServerState } from "@/lib/types";
 import { cn } from "@/lib/cn";
 
-export function AgentsTab({ server }: { server: ServerState }) {
+/** How the Agents tab names this computer among install targets. */
+const HOST = "host";
+
+export function AgentsTab({
+  server,
+  initialTarget,
+}: {
+  server: ServerState;
+  /** A sandbox id to preselect — set when arriving from the Sandbox tab. */
+  initialTarget?: string | null;
+}) {
   const [agents, setAgents] = useState<AgentTarget[]>([]);
+  const [sandboxes, setSandboxes] = useState<SandboxView[]>([]);
+  const [target, setTarget] = useState(initialTarget ?? HOST);
   const [busy, setBusy] = useState<string | null>(null);
 
   useEffect(() => {
     void listAgents().then(setAgents).catch(() => {});
-    return subscribe("agents:changed", setAgents);
+    void getSandboxState()
+      .then((state) => setSandboxes(state.sandboxes))
+      .catch(() => {});
+    const offAgents = subscribe("agents:changed", setAgents);
+    const offSandboxes = subscribe("sandbox:state", (state) => setSandboxes(state.sandboxes));
+    return () => {
+      offAgents();
+      offSandboxes();
+    };
   }, []);
+
+  const targets: PickerOption[] = [
+    { id: HOST, label: "this computer" },
+    ...sandboxes.map((s) => ({ id: s.spec.id, label: `sandbox · ${s.spec.name}` })),
+  ];
+  // A sandbox deleted while selected falls back to this computer.
+  const selected = targets.some((t) => t.id === target) ? target : HOST;
+  const nameOf = (id: string) =>
+    id === HOST ? "this computer" : (sandboxes.find((s) => s.spec.id === id)?.spec.name ?? id);
 
   async function toggle(a: AgentTarget) {
     setBusy(a.id);
     try {
-      const next = a.installed ? await uninstallAgent(a.id) : await installAgent(a.id);
+      const next = a.installedTargets.includes(selected)
+        ? await uninstallAgent(a.id, selected)
+        : await installAgent(a.id, selected);
       setAgents((prev) => prev.map((x) => (x.id === next.id ? next : x)));
     } catch {
       void listAgents().then(setAgents).catch(() => {});
@@ -33,10 +65,29 @@ export function AgentsTab({ server }: { server: ServerState }) {
 
   return (
     <TabShell>
-      <p className="px-0.5 text-[11px] leading-relaxed text-[rgb(var(--text-dim))]">
-        one click adds conduit to an agent's config. your file is backed up first, and only the
-        conduit entry is touched.
-      </p>
+      <div className="flex items-start justify-between gap-4 px-0.5">
+        <p className="text-[11px] leading-relaxed text-[rgb(var(--text-dim))]">
+          one click adds conduit to an agent's config. your file is backed up first, and only the
+          conduit entry is touched.
+        </p>
+        <div className="flex shrink-0 items-center gap-2">
+          <span className="text-[11px] text-[rgb(var(--text-dim))]">install for</span>
+          <Picker
+            label="install for"
+            listLabel="install targets"
+            options={targets}
+            selectedId={selected}
+            onSelect={setTarget}
+            className="w-[168px]"
+          />
+        </div>
+      </div>
+      {selected !== HOST && (
+        <p className="-mt-2 px-0.5 text-[10.5px] leading-relaxed text-[rgb(var(--text-faint))]">
+          the agent gets a second server, conduit-{selected}, whose tools act inside the sandbox.
+          it can keep this computer too, and choose per task.
+        </p>
+      )}
 
       <Card>
         {detected.map((a) => (
@@ -46,6 +97,8 @@ export function AgentsTab({ server }: { server: ServerState }) {
             busy={busy === a.id}
             onToggle={() => void toggle(a)}
             port={server.port}
+            target={selected}
+            nameOf={nameOf}
           />
         ))}
         {detected.length === 0 && (
@@ -80,13 +133,21 @@ function AgentRow({
   busy,
   onToggle,
   port,
+  target,
+  nameOf,
 }: {
   agent: AgentTarget;
   busy: boolean;
   onToggle: () => void;
   port: number;
+  /** "host" or a sandbox id. */
+  target: string;
+  nameOf: (target: string) => string;
 }) {
   const home = agent.configPath.replace(/^\/Users\/[^/]+/, "~");
+  const installed = agent.installedTargets.includes(target);
+  const path = target === HOST ? "/mcp" : `/sandbox/${target}/mcp`;
+  const elsewhere = agent.installedTargets.filter((t) => t !== target).map(nameOf);
 
   return (
     <Row
@@ -97,8 +158,13 @@ function AgentRow({
           <span className="flex items-center gap-1 text-amber-600 dark:text-amber-400">
             <TriangleAlert size={10} /> {agent.error}
           </span>
-        ) : agent.installed ? (
-          <span className="font-mono text-[10.5px]">127.0.0.1:{port}/mcp</span>
+        ) : installed ? (
+          <span className="font-mono text-[10.5px]">
+            127.0.0.1:{port}
+            {path}
+          </span>
+        ) : elsewhere.length > 0 ? (
+          <span className="block truncate text-[10.5px]">also set up for {elsewhere.join(", ")}</span>
         ) : (
           // Config paths get long (Claude Desktop's is 60+ chars). Truncating
           // keeps every row one line tall; the full path is in the tooltip.
@@ -120,7 +186,7 @@ function AgentRow({
             >
               <Loader2 size={13} className="animate-spin text-[rgb(var(--text-faint))]" />
             </motion.span>
-          ) : agent.installed ? (
+          ) : installed ? (
             <motion.span
               key="installed"
               initial={{ opacity: 0, scale: 0.9 }}

@@ -12,9 +12,13 @@ import type {
   ControlState,
   CursorEvent,
   HyprlandState,
+  NewSandbox,
   PendingApproval,
   Readiness,
   PulseEvent,
+  SandboxActivity,
+  SandboxPatch,
+  SandboxesState,
   ServerState,
   Settings,
   ToolCallEvent,
@@ -182,16 +186,75 @@ const local: Record<string, (args: Record<string, unknown>) => unknown> = {
   get_tailscale_state: () => standalone.tailscale,
   get_hyprland_state: () => standalone.hyprland,
   enable_remote: () => ({ ...standalone.tailscale, sharing: true }),
+  enable_remote_with_password: () => ({ ...standalone.tailscale, sharing: true }),
   disable_remote: () => ({ ...standalone.tailscale, sharing: false, publicUrl: null }),
   regenerate_remote_token: () => standalone.tailscale,
-  install_agent: (a) => ({
-    ...standalone.agents.find((x) => x.id === a.id)!,
-    installed: true,
-  }),
-  uninstall_agent: (a) => ({
-    ...standalone.agents.find((x) => x.id === a.id)!,
-    installed: false,
-  }),
+  install_agent: (a) => {
+    const agent = standalone.agents.find((x) => x.id === a.id)!;
+    const target = (a.target as string | undefined) ?? "host";
+    if (!agent.installedTargets.includes(target)) agent.installedTargets.push(target);
+    agent.installed = agent.installedTargets.includes("host");
+    return { ...agent };
+  },
+  uninstall_agent: (a) => {
+    const agent = standalone.agents.find((x) => x.id === a.id)!;
+    const target = (a.target as string | undefined) ?? "host";
+    agent.installedTargets = agent.installedTargets.filter((t) => t !== target);
+    agent.installed = agent.installedTargets.includes("host");
+    return { ...agent };
+  },
+  get_sandbox_state: () => structuredClone(standalone.sandboxes),
+  refresh_docker: () => structuredClone(standalone.sandboxes),
+  create_sandbox: (a) => {
+    const sandbox = a.sandbox as NewSandbox;
+    const id = sandbox.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "sandbox";
+    standalone.sandboxes.sandboxes.push({
+      spec: { ...sandbox, id, createdAt: Date.now() },
+      status: "starting",
+      error: null,
+      build: null,
+      paused: false,
+      endpoint: `http://127.0.0.1:6767/sandbox/${id}/mcp`,
+      busyCalls: 0,
+    });
+    return structuredClone(standalone.sandboxes);
+  },
+  update_sandbox: (a) => {
+    const view = standalone.sandboxes.sandboxes.find((x) => x.spec.id === a.id);
+    if (view) Object.assign(view.spec, a.patch as SandboxPatch);
+    return structuredClone(standalone.sandboxes);
+  },
+  delete_sandbox: (a) => {
+    standalone.sandboxes.sandboxes = standalone.sandboxes.sandboxes.filter((x) => x.spec.id !== a.id);
+    return structuredClone(standalone.sandboxes);
+  },
+  start_sandbox: (a) => {
+    const view = standalone.sandboxes.sandboxes.find((x) => x.spec.id === a.id);
+    if (view) view.status = "running";
+    return structuredClone(standalone.sandboxes);
+  },
+  stop_sandbox: (a) => {
+    const view = standalone.sandboxes.sandboxes.find((x) => x.spec.id === a.id);
+    if (view) view.status = "stopped";
+    return structuredClone(standalone.sandboxes);
+  },
+  cancel_sandbox_build: () => undefined,
+  set_sandbox_stop_on_quit: (a) => {
+    standalone.sandboxes.stopOnQuit = a.stop as boolean;
+    return structuredClone(standalone.sandboxes);
+  },
+  interrupt_sandbox_agent: (a) => {
+    const view = standalone.sandboxes.sandboxes.find((x) => x.spec.id === a.id);
+    if (view) view.paused = true;
+    return structuredClone(standalone.sandboxes);
+  },
+  resume_sandbox_agent: (a) => {
+    const view = standalone.sandboxes.sandboxes.find((x) => x.spec.id === a.id);
+    if (view) view.paused = false;
+    return structuredClone(standalone.sandboxes);
+  },
+  set_sandbox_tab_visible: () => undefined,
+  open_docker_download: () => undefined,
 };
 
 function invoke<T>(cmd: string, args: Record<string, unknown> = {}): Promise<T> {
@@ -305,13 +368,42 @@ export const resolveApproval = (id: string, decision: "allow" | "session" | "den
 /* ── agents ─────────────────────────────────────────────────── */
 
 export const listAgents = () => invoke<AgentTarget[]>("list_agents");
-export const installAgent = (id: string) => invoke<AgentTarget>("install_agent", { id });
-export const uninstallAgent = (id: string) => invoke<AgentTarget>("uninstall_agent", { id });
+/** `target` is "host" for this computer, else a sandbox id. */
+export const installAgent = (id: string, target = "host") =>
+  invoke<AgentTarget>("install_agent", { id, target });
+export const uninstallAgent = (id: string, target = "host") =>
+  invoke<AgentTarget>("uninstall_agent", { id, target });
+
+/* ── sandboxes ──────────────────────────────────────────────── */
+
+export const getSandboxState = () => invoke<SandboxesState>("get_sandbox_state");
+export const refreshDocker = () => invoke<SandboxesState>("refresh_docker");
+/** Creates and starts it; the first sandbox of an OS builds its image first. */
+export const createSandbox = (sandbox: NewSandbox) =>
+  invoke<SandboxesState>("create_sandbox", { sandbox });
+export const updateSandbox = (id: string, patch: SandboxPatch) =>
+  invoke<SandboxesState>("update_sandbox", { id, patch });
+export const deleteSandbox = (id: string) => invoke<SandboxesState>("delete_sandbox", { id });
+export const startSandbox = (id: string) => invoke<SandboxesState>("start_sandbox", { id });
+export const stopSandbox = (id: string) => invoke<SandboxesState>("stop_sandbox", { id });
+export const cancelSandboxBuild = (id: string) => invoke<void>("cancel_sandbox_build", { id });
+export const setSandboxStopOnQuit = (stop: boolean) =>
+  invoke<SandboxesState>("set_sandbox_stop_on_quit", { stop });
+/** Cancels what the agent is doing in this sandbox and refuses its next calls. */
+export const interruptSandboxAgent = (id: string) =>
+  invoke<SandboxesState>("interrupt_sandbox_agent", { id });
+export const resumeSandboxAgent = (id: string) =>
+  invoke<SandboxesState>("resume_sandbox_agent", { id });
+export const setSandboxTabVisible = (visible: boolean) =>
+  invoke<void>("set_sandbox_tab_visible", { visible });
+export const openDockerDownload = () => invoke<void>("open_docker_download");
 
 /* ── tailscale sharing ──────────────────────────────────────── */
 
 export const getTailscaleState = () => invoke<TailscaleState>("get_tailscale_state");
 export const enableRemote = () => invoke<TailscaleState>("enable_remote");
+export const enableRemoteWithPassword = (password: string) =>
+  invoke<TailscaleState>("enable_remote_with_password", { password });
 export const disableRemote = () => invoke<TailscaleState>("disable_remote");
 export const regenerateRemoteToken = () => invoke<TailscaleState>("regenerate_remote_token");
 
@@ -337,6 +429,8 @@ type EventMap = {
   "control:pulse": PulseEvent;
   "control:approval": PendingApproval | null;
   "browser:state": BrowserState;
+  "sandbox:state": SandboxesState;
+  "sandbox:activity": SandboxActivity;
   "agents:changed": AgentTarget[];
   "tailscale:state": TailscaleState;
 };

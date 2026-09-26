@@ -14,6 +14,8 @@
 
 use std::path::PathBuf;
 use std::process::Command;
+#[cfg(target_os = "linux")]
+use std::io::Write;
 
 use serde::Serialize;
 
@@ -174,7 +176,65 @@ pub fn public_url(hostname: &str, token: &str) -> String {
 /// Starts a background funnel pointing at conduit's sharing listener.
 pub fn start_funnel(remote_port: u16) -> Result<(), String> {
     let cli = cli().ok_or("tailscale is not installed")?;
-    run(&cli, &["funnel", "--bg", &remote_port.to_string()]).map(|_| ())
+    run(&cli, &["funnel", "--bg", &remote_port.to_string()])
+        .map(|_| ())
+        .map_err(|error| {
+            if cfg!(target_os = "linux") && needs_operator(&error) {
+                "TAILSCALE_OPERATOR_REQUIRED: Tailscale needs your Linux password to grant this user operator access.".into()
+            } else {
+                error
+            }
+        })
+}
+
+fn needs_operator(error: &str) -> bool {
+    error.contains("serve config denied") && error.contains("sudo tailscale")
+}
+
+/// Grant this login user Tailscale operator access through sudo's stdin. The
+/// password is never placed in an argument, environment variable, log or file.
+#[cfg(target_os = "linux")]
+pub fn grant_operator(password: String) -> Result<(), String> {
+    let user = Command::new("/usr/bin/id")
+        .arg("-un")
+        .output()
+        .map_err(|e| format!("could not identify your Linux user: {e}"))?;
+    if !user.status.success() {
+        return Err("could not identify your Linux user".into());
+    }
+    let user = String::from_utf8_lossy(&user.stdout).trim().to_string();
+    if user.is_empty() {
+        return Err("could not identify your Linux user".into());
+    }
+    let cli = cli().ok_or("tailscale is not installed")?;
+    let mut child = Command::new("/usr/bin/sudo")
+        .args(["-S", "-p", "", "--"])
+        .arg(cli)
+        .arg("set")
+        .arg(format!("--operator={user}"))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("could not start sudo: {e}"))?;
+    let mut bytes = password.into_bytes();
+    let write_result = child.stdin.take().ok_or_else(|| "sudo did not accept input".to_string()).and_then(|mut input| {
+        input.write_all(&bytes).and_then(|_| input.write_all(b"\n"))
+            .map_err(|e| format!("could not provide password to sudo: {e}"))
+    });
+    bytes.fill(0);
+    write_result?;
+    let out = child.wait_with_output().map_err(|e| format!("sudo failed: {e}"))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        let error = String::from_utf8_lossy(&out.stderr);
+        if error.contains("incorrect password") || error.contains("Sorry, try again") {
+            Err("Incorrect Linux password. Try again.".into())
+        } else {
+            Err(format!("Could not grant Tailscale operator access: {}", error.trim()))
+        }
+    }
 }
 
 /// Tears the funnel down. Targets conduit's port specifically so any other
@@ -237,5 +297,11 @@ mod tests {
     fn remote_port_is_distinct_from_local() {
         let local = crate::state::DEFAULT_PORT;
         assert_ne!(crate::state::remote_port(local), local);
+    }
+
+    #[test]
+    fn only_operator_denials_trigger_the_password_flow() {
+        assert!(needs_operator("sending serve config: Access denied: serve config denied Use 'sudo tailscale funnel --bg 6768'."));
+        assert!(!needs_operator("Funnel is disabled for this tailnet"));
     }
 }

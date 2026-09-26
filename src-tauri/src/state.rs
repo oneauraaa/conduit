@@ -13,6 +13,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::browser::BrowserManager;
 use crate::mcp::catalog::{self, ActionSurface};
+use crate::sandbox::SandboxManager;
 
 pub const DEFAULT_PORT: u16 = 6767;
 
@@ -330,6 +331,8 @@ pub struct ToolCallEvent {
     pub outcome: &'static str,
     pub detail: Option<String>,
     pub duration_ms: Option<u64>,
+    /// The sandbox the call ran in, or `None` for this computer.
+    pub target: Option<String>,
 }
 
 struct ApprovalWaiter {
@@ -466,6 +469,10 @@ pub struct AppState {
     active_calls: AtomicU64,
     seq: AtomicU64,
     pub browser: Arc<BrowserManager>,
+    pub sandboxes: Arc<SandboxManager>,
+    /// The per-sandbox MCP services of the running server. None while the
+    /// server is stopped.
+    pub sandbox_services: RwLock<Option<Arc<crate::mcp::server::SandboxServices>>>,
 }
 
 /// How long an agent can go without calling a tool before conduit decides the
@@ -481,6 +488,7 @@ impl AppState {
         let port = settings.port;
         let mode = settings.default_access;
         let browser = BrowserManager::new(app.clone());
+        let sandboxes = SandboxManager::new(app.clone(), port);
         Self {
             app,
             settings: RwLock::new(settings),
@@ -507,6 +515,8 @@ impl AppState {
             active_calls: AtomicU64::new(0),
             seq: AtomicU64::new(0),
             browser,
+            sandboxes,
+            sandbox_services: RwLock::new(None),
         }
     }
 
@@ -663,6 +673,10 @@ impl AppState {
         self.update_control(|c| c.stopped = true);
         let browser = self.browser.clone();
         tauri::async_runtime::spawn(async move { browser.panic_stop().await });
+        // Sandbox calls never raise the host's control session, so ending it
+        // above does not reach them; cancel them directly. The latch refuses
+        // the next ones.
+        self.sandboxes.interrupt_all();
     }
 
     /// Hands control back, so agents may start a new session.
@@ -769,6 +783,19 @@ impl AppState {
         detail: Option<String>,
         duration_ms: Option<u64>,
     ) {
+        self.log_call_for(None, tool, client, outcome, detail, duration_ms);
+    }
+
+    /// [`AppState::log_call`] for a call that ran in a sandbox.
+    pub fn log_call_for(
+        &self,
+        target: Option<String>,
+        tool: &str,
+        client: Option<String>,
+        outcome: &'static str,
+        detail: Option<String>,
+        duration_ms: Option<u64>,
+    ) {
         let event = ToolCallEvent {
             id: self.next_id("call"),
             tool: tool.to_string(),
@@ -777,6 +804,7 @@ impl AppState {
             outcome,
             detail,
             duration_ms,
+            target,
         };
         let _ = self.app.emit("server:tool-call", &event);
     }

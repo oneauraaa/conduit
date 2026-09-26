@@ -13,8 +13,55 @@ use serde::Serialize;
 
 use crate::state::now_millis;
 
-/// The key conduit writes under, in every format.
+/// The key conduit writes under, in every format, for this computer. A
+/// sandbox's entry is this plus `-<id>`, so an agent can hold both at once and
+/// pick per task — its tools arrive namespaced by the key.
 const ENTRY: &str = "conduit";
+
+/// Which machine an agent config entry points at.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Target {
+    /// This computer, at `/mcp`.
+    Host,
+    /// A sandbox, at `/sandbox/<id>/mcp`.
+    Sandbox(String),
+}
+
+impl Target {
+    /// From the UI's spelling: absent or `"host"` for this computer, else a
+    /// sandbox id.
+    pub fn parse(raw: Option<&str>) -> Result<Self, String> {
+        match raw {
+            None | Some("host") => Ok(Self::Host),
+            Some(id) if crate::sandbox::model::valid_id(id) => Ok(Self::Sandbox(id.to_string())),
+            Some(id) => Err(format!("{id:?} is not a sandbox id")),
+        }
+    }
+
+    /// The config key: `conduit` or `conduit-<id>`.
+    pub fn entry(&self) -> String {
+        match self {
+            Self::Host => ENTRY.to_string(),
+            Self::Sandbox(id) => format!("{ENTRY}-{id}"),
+        }
+    }
+
+    /// The UI's spelling, as reported in [`AgentTarget::installed_targets`].
+    pub fn key(&self) -> String {
+        match self {
+            Self::Host => "host".into(),
+            Self::Sandbox(id) => id.clone(),
+        }
+    }
+
+    fn from_entry(entry: &str) -> Option<Self> {
+        if entry == ENTRY {
+            return Some(Self::Host);
+        }
+        let id = entry.strip_prefix(ENTRY)?.strip_prefix('-')?;
+        crate::sandbox::model::valid_id(id).then(|| Self::Sandbox(id.to_string()))
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -23,7 +70,10 @@ pub struct AgentTarget {
     pub name: String,
     pub config_path: String,
     pub detected: bool,
+    /// Installed for this computer.
     pub installed: bool,
+    /// Every machine this agent has an entry for: `"host"` and sandbox ids.
+    pub installed_targets: Vec<String>,
     pub error: Option<String>,
     /// data: URL of the vendor app's icon, or None when it isn't installed.
     pub icon: Option<String>,
@@ -255,8 +305,11 @@ fn spec(id: &str) -> Option<&'static Spec> {
     SPECS.iter().find(|s| s.id == id)
 }
 
-pub fn endpoint(port: u16) -> String {
-    format!("http://127.0.0.1:{port}/mcp")
+pub fn endpoint(port: u16, target: &Target) -> String {
+    match target {
+        Target::Host => format!("http://127.0.0.1:{port}/mcp"),
+        Target::Sandbox(id) => format!("http://127.0.0.1:{port}/sandbox/{id}/mcp"),
+    }
 }
 
 /// Every known agent with its current detection and install state.
@@ -270,9 +323,9 @@ pub fn list(_port: u16) -> Vec<AgentTarget> {
                     .map(|d| home().join(d).exists())
                     .unwrap_or(false);
 
-            let (installed, error) = match is_installed(&path, s.format) {
+            let (installed_targets, error) = match installed_targets(&path, s.format) {
                 Ok(v) => (v, None),
-                Err(e) => (false, Some(e)),
+                Err(e) => (Vec::new(), Some(e)),
             };
 
             AgentTarget {
@@ -280,7 +333,8 @@ pub fn list(_port: u16) -> Vec<AgentTarget> {
                 name: s.name.to_string(),
                 config_path: path.to_string_lossy().into_owned(),
                 detected,
-                installed,
+                installed: installed_targets.iter().any(|t| t == "host"),
+                installed_targets,
                 error,
                 icon: icon_for(s),
             }
@@ -288,32 +342,52 @@ pub fn list(_port: u16) -> Vec<AgentTarget> {
         .collect()
 }
 
-fn is_installed(path: &Path, format: Format) -> Result<bool, String> {
+/// Every machine this config has a conduit entry for, as [`Target::key`]s.
+fn installed_targets(path: &Path, format: Format) -> Result<Vec<String>, String> {
     if !path.exists() {
-        return Ok(false);
+        return Ok(Vec::new());
     }
     let text = std::fs::read_to_string(path).map_err(|e| format!("could not read: {e}"))?;
+    Ok(entry_names(&text, format)
+        .iter()
+        .filter_map(|name| Target::from_entry(name))
+        .map(|target| target.key())
+        .collect())
+}
 
-    Ok(match format {
-        Format::JsonMcpServers | Format::JsoncMcp => parse_jsonish(&text)
+/// The server keys in a config file, whatever they point at. Unparseable
+/// files report none rather than failing, as before.
+fn entry_names(text: &str, format: Format) -> Vec<String> {
+    match format {
+        Format::JsonMcpServers | Format::JsoncMcp => parse_jsonish(text)
             .ok()
             .and_then(|v| {
                 v.get("mcpServers")
                     .or_else(|| v.get("mcp"))
-                    .and_then(|m| m.get(ENTRY))
-                    .cloned()
+                    .and_then(|m| m.as_object())
+                    .map(|m| m.keys().cloned().collect())
             })
-            .is_some(),
+            .unwrap_or_default(),
         Format::TomlMcpServers => text
             .parse::<toml_edit::DocumentMut>()
             .ok()
-            .and_then(|d| d.get("mcp_servers").and_then(|t| t.get(ENTRY)).cloned())
-            .is_some(),
-        Format::YamlMcpServers => serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&text)
+            .and_then(|d| {
+                d.get("mcp_servers")
+                    .and_then(|t| t.as_table_like())
+                    .map(|t| t.iter().map(|(k, _)| k.to_string()).collect())
+            })
+            .unwrap_or_default(),
+        Format::YamlMcpServers => serde_yaml_ng::from_str::<serde_yaml_ng::Value>(text)
             .ok()
-            .and_then(|v| v.get("mcp_servers").and_then(|m| m.get(ENTRY)).cloned())
-            .is_some(),
-    })
+            .and_then(|v| {
+                v.get("mcp_servers").and_then(|m| m.as_mapping()).map(|m| {
+                    m.keys()
+                        .filter_map(|k| k.as_str().map(str::to_string))
+                        .collect()
+                })
+            })
+            .unwrap_or_default(),
+    }
 }
 
 /// Parses JSON that may contain comments and trailing commas.
@@ -358,58 +432,87 @@ fn write_atomic(path: &Path, contents: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub fn install(id: &str, port: u16) -> Result<AgentTarget, String> {
+pub fn install(id: &str, port: u16, target: &Target) -> Result<AgentTarget, String> {
     let s = spec(id).ok_or_else(|| format!("unknown agent: {id}"))?;
     let path = home().join(s.rel_path());
-    let url = endpoint(port);
+    let url = endpoint(port, target);
+    let entry = target.entry();
 
     backup(&path)?;
 
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
     let next = match s.format {
-        Format::JsonMcpServers => edit_json(&existing, &url, true)?,
-        Format::JsoncMcp => edit_json(&existing, &url, false)?,
-        Format::TomlMcpServers => edit_toml(&existing, &url)?,
-        Format::YamlMcpServers => edit_yaml(&existing, &url)?,
+        Format::JsonMcpServers => edit_json(&existing, &entry, &url, true)?,
+        Format::JsoncMcp => edit_json(&existing, &entry, &url, false)?,
+        Format::TomlMcpServers => edit_toml(&existing, &entry, &url)?,
+        Format::YamlMcpServers => edit_yaml(&existing, &entry, &url)?,
     };
     write_atomic(&path, &next)?;
 
     Ok(single(s))
 }
 
-pub fn uninstall(id: &str, _port: u16) -> Result<AgentTarget, String> {
+pub fn uninstall(id: &str, _port: u16, target: &Target) -> Result<AgentTarget, String> {
     let s = spec(id).ok_or_else(|| format!("unknown agent: {id}"))?;
+    remove_from(s, &target.entry())?;
+    Ok(single(s))
+}
+
+fn remove_from(s: &Spec, entry: &str) -> Result<(), String> {
     let path = home().join(s.rel_path());
 
     if !path.exists() {
-        return Ok(single(s));
+        return Ok(());
     }
     backup(&path)?;
 
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
     let next = match s.format {
-        Format::JsonMcpServers => remove_json(&existing, true)?,
-        Format::JsoncMcp => remove_json(&existing, false)?,
-        Format::TomlMcpServers => remove_toml(&existing)?,
-        Format::YamlMcpServers => remove_yaml(&existing)?,
+        Format::JsonMcpServers => remove_json(&existing, entry, true)?,
+        Format::JsoncMcp => remove_json(&existing, entry, false)?,
+        Format::TomlMcpServers => remove_toml(&existing, entry)?,
+        Format::YamlMcpServers => remove_yaml(&existing, entry)?,
     };
-    write_atomic(&path, &next)?;
+    write_atomic(&path, &next)
+}
 
-    Ok(single(s))
+/// Removes `target`'s entry from every agent that has one — when a sandbox is
+/// deleted, so no agent is left pointing at an endpoint that now 404s. Files
+/// without the entry are not touched (not even backed up).
+pub fn remove_everywhere(target: &Target) -> Result<(), String> {
+    let key = target.key();
+    let mut failures = Vec::new();
+    for s in SPECS {
+        let path = home().join(s.rel_path());
+        let has = installed_targets(&path, s.format)
+            .map(|targets| targets.contains(&key))
+            .unwrap_or(false);
+        if has {
+            if let Err(error) = remove_from(s, &target.entry()) {
+                failures.push(format!("{}: {error}", s.name));
+            }
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("; "))
+    }
 }
 
 fn single(s: &'static Spec) -> AgentTarget {
     let path = home().join(s.rel_path());
-    let (installed, error) = match is_installed(&path, s.format) {
+    let (installed_targets, error) = match installed_targets(&path, s.format) {
         Ok(v) => (v, None),
-        Err(e) => (false, Some(e)),
+        Err(e) => (Vec::new(), Some(e)),
     };
     AgentTarget {
         id: s.id.to_string(),
         name: s.name.to_string(),
         config_path: path.to_string_lossy().into_owned(),
         detected: true,
-        installed,
+        installed: installed_targets.iter().any(|t| t == "host"),
+        installed_targets,
         error,
         icon: icon_for(s),
     }
@@ -437,7 +540,12 @@ fn conduit_json_entry(url: &str, opencode: bool) -> serde_json::Value {
 
 /// `mcp_key` picks the container: `mcpServers` for most agents, `mcp` for
 /// opencode.
-fn edit_json(existing: &str, url: &str, mcp_servers_key: bool) -> Result<String, String> {
+fn edit_json(
+    existing: &str,
+    entry: &str,
+    url: &str,
+    mcp_servers_key: bool,
+) -> Result<String, String> {
     let mut root = parse_jsonish(existing)?;
     if !root.is_object() {
         root = serde_json::Value::Object(Default::default());
@@ -454,17 +562,17 @@ fn edit_json(existing: &str, url: &str, mcp_servers_key: bool) -> Result<String,
     servers
         .as_object_mut()
         .expect("checked above")
-        .insert(ENTRY.to_string(), conduit_json_entry(url, !mcp_servers_key));
+        .insert(entry.to_string(), conduit_json_entry(url, !mcp_servers_key));
 
     serde_json::to_string_pretty(&root).map_err(|e| format!("could not serialize: {e}"))
 }
 
-fn remove_json(existing: &str, mcp_servers_key: bool) -> Result<String, String> {
+fn remove_json(existing: &str, entry: &str, mcp_servers_key: bool) -> Result<String, String> {
     let mut root = parse_jsonish(existing)?;
     let key = if mcp_servers_key { "mcpServers" } else { "mcp" };
 
     if let Some(servers) = root.get_mut(key).and_then(|v| v.as_object_mut()) {
-        servers.remove(ENTRY);
+        servers.remove(entry);
     }
     serde_json::to_string_pretty(&root).map_err(|e| format!("could not serialize: {e}"))
 }
@@ -472,7 +580,7 @@ fn remove_json(existing: &str, mcp_servers_key: bool) -> Result<String, String> 
 /// TOML is edited with `toml_edit` specifically so the rest of the file — key
 /// order, comments, spacing — survives untouched. Codex's config in particular
 /// is large and hand-maintained.
-fn edit_toml(existing: &str, url: &str) -> Result<String, String> {
+fn edit_toml(existing: &str, entry: &str, url: &str) -> Result<String, String> {
     let mut doc = existing
         .parse::<toml_edit::DocumentMut>()
         .map_err(|e| format!("could not parse the toml: {e}"))?;
@@ -485,26 +593,26 @@ fn edit_toml(existing: &str, url: &str) -> Result<String, String> {
         // Implicit so it renders as `[mcp_servers.conduit]` rather than an
         // empty `[mcp_servers]` header appearing out of nowhere.
         table.set_implicit(true);
-        let mut entry = toml_edit::Table::new();
-        entry["url"] = toml_edit::value(url);
-        table.insert(ENTRY, toml_edit::Item::Table(entry));
+        let mut server = toml_edit::Table::new();
+        server["url"] = toml_edit::value(url);
+        table.insert(entry, toml_edit::Item::Table(server));
     }
 
     Ok(doc.to_string())
 }
 
-fn remove_toml(existing: &str) -> Result<String, String> {
+fn remove_toml(existing: &str, entry: &str) -> Result<String, String> {
     let mut doc = existing
         .parse::<toml_edit::DocumentMut>()
         .map_err(|e| format!("could not parse the toml: {e}"))?;
 
     if let Some(table) = doc.get_mut("mcp_servers").and_then(|t| t.as_table_mut()) {
-        table.remove(ENTRY);
+        table.remove(entry);
     }
     Ok(doc.to_string())
 }
 
-fn edit_yaml(existing: &str, url: &str) -> Result<String, String> {
+fn edit_yaml(existing: &str, entry: &str, url: &str) -> Result<String, String> {
     let mut root: serde_yaml_ng::Value = if existing.trim().is_empty() {
         serde_yaml_ng::Value::Mapping(Default::default())
     } else {
@@ -523,20 +631,20 @@ fn edit_yaml(existing: &str, url: &str) -> Result<String, String> {
         *servers = serde_yaml_ng::Value::Mapping(Default::default());
     }
 
-    let mut entry = serde_yaml_ng::Mapping::new();
-    entry.insert(
+    let mut server = serde_yaml_ng::Mapping::new();
+    server.insert(
         serde_yaml_ng::Value::String("url".into()),
         serde_yaml_ng::Value::String(url.to_string()),
     );
     servers.as_mapping_mut().expect("checked above").insert(
-        serde_yaml_ng::Value::String(ENTRY.into()),
-        serde_yaml_ng::Value::Mapping(entry),
+        serde_yaml_ng::Value::String(entry.into()),
+        serde_yaml_ng::Value::Mapping(server),
     );
 
     serde_yaml_ng::to_string(&root).map_err(|e| format!("could not serialize the yaml: {e}"))
 }
 
-fn remove_yaml(existing: &str) -> Result<String, String> {
+fn remove_yaml(existing: &str, entry: &str) -> Result<String, String> {
     let mut root: serde_yaml_ng::Value =
         serde_yaml_ng::from_str(existing).map_err(|e| format!("could not parse the yaml: {e}"))?;
 
@@ -544,7 +652,7 @@ fn remove_yaml(existing: &str) -> Result<String, String> {
         .get_mut("mcp_servers")
         .and_then(|v| v.as_mapping_mut())
     {
-        servers.remove(serde_yaml_ng::Value::String(ENTRY.into()));
+        servers.remove(serde_yaml_ng::Value::String(entry.into()));
     }
     serde_yaml_ng::to_string(&root).map_err(|e| format!("could not serialize the yaml: {e}"))
 }
@@ -638,7 +746,7 @@ enabled = true
 trust_level = "trusted"
 "#;
 
-        let edited = edit_toml(original, URL).expect("edit should succeed");
+        let edited = edit_toml(original, ENTRY, URL).expect("edit should succeed");
 
         assert!(edited.contains("# a comment the user wrote"));
         assert!(edited.contains(r#"model = "gpt-5.6-sol""#));
@@ -648,14 +756,14 @@ trust_level = "trusted"
         assert!(edited.contains(URL));
 
         // And removal must put it back exactly as it was.
-        let removed = remove_toml(&edited).expect("remove should succeed");
+        let removed = remove_toml(&edited, ENTRY).expect("remove should succeed");
         assert!(!removed.contains("conduit"));
         assert!(removed.contains("# a comment the user wrote"));
     }
 
     #[test]
     fn toml_edit_creates_the_table_when_absent() {
-        let edited = edit_toml("", URL).unwrap();
+        let edited = edit_toml("", ENTRY, URL).unwrap();
         assert!(edited.contains("[mcp_servers.conduit]"));
         assert!(edited.contains(URL));
     }
@@ -663,7 +771,7 @@ trust_level = "trusted"
     #[test]
     fn json_edit_keeps_sibling_keys() {
         let original = r#"{"numStartups": 42, "mcpServers": {"other": {"url": "http://x"}}}"#;
-        let edited = edit_json(original, URL, true).unwrap();
+        let edited = edit_json(original, ENTRY, URL, true).unwrap();
         let v: serde_json::Value = serde_json::from_str(&edited).unwrap();
 
         assert_eq!(v["numStartups"], 42);
@@ -675,7 +783,7 @@ trust_level = "trusted"
     #[test]
     fn json_edit_handles_an_empty_or_missing_file() {
         for original in ["", "{}"] {
-            let edited = edit_json(original, URL, true).unwrap();
+            let edited = edit_json(original, ENTRY, URL, true).unwrap();
             let v: serde_json::Value = serde_json::from_str(&edited).unwrap();
             assert_eq!(v["mcpServers"]["conduit"]["url"], URL);
         }
@@ -689,7 +797,7 @@ trust_level = "trusted"
   "theme": "dark",
   "mcp": {}
 }"#;
-        let edited = edit_json(original, URL, false).unwrap();
+        let edited = edit_json(original, ENTRY, URL, false).unwrap();
         let v: serde_json::Value = serde_json::from_str(&edited).unwrap();
 
         assert_eq!(v["theme"], "dark");
@@ -702,7 +810,7 @@ trust_level = "trusted"
     #[test]
     fn yaml_edit_keeps_sibling_keys() {
         let original = "model: hermes-4\nmcp_servers:\n  other:\n    url: http://x\n";
-        let edited = edit_yaml(original, URL).unwrap();
+        let edited = edit_yaml(original, ENTRY, URL).unwrap();
         let v: serde_yaml_ng::Value = serde_yaml_ng::from_str(&edited).unwrap();
 
         assert_eq!(v["model"].as_str(), Some("hermes-4"));
@@ -713,9 +821,9 @@ trust_level = "trusted"
     #[test]
     fn removal_is_idempotent_and_leaves_others_alone() {
         let original = r#"{"mcpServers": {"other": {"url": "http://x"}}}"#;
-        let with = edit_json(original, URL, true).unwrap();
-        let without = remove_json(&with, true).unwrap();
-        let again = remove_json(&without, true).unwrap();
+        let with = edit_json(original, ENTRY, URL, true).unwrap();
+        let without = remove_json(&with, ENTRY, true).unwrap();
+        let again = remove_json(&without, ENTRY, true).unwrap();
 
         let v: serde_json::Value = serde_json::from_str(&again).unwrap();
         assert!(v["mcpServers"].get("conduit").is_none());
@@ -724,8 +832,8 @@ trust_level = "trusted"
 
     #[test]
     fn installing_twice_does_not_duplicate_the_entry() {
-        let once = edit_toml("", URL).unwrap();
-        let twice = edit_toml(&once, URL).unwrap();
+        let once = edit_toml("", ENTRY, URL).unwrap();
+        let twice = edit_toml(&once, ENTRY, URL).unwrap();
         assert_eq!(twice.matches("[mcp_servers.conduit]").count(), 1);
     }
 }
@@ -737,6 +845,66 @@ trust_level = "trusted"
 #[cfg(test)]
 mod fs_tests {
     use super::*;
+
+    #[test]
+    fn targets_parse_and_name_their_entries() {
+        assert_eq!(Target::parse(None).unwrap(), Target::Host);
+        assert_eq!(Target::parse(Some("host")).unwrap(), Target::Host);
+        assert_eq!(
+            Target::parse(Some("work")).unwrap(),
+            Target::Sandbox("work".into())
+        );
+        assert!(Target::parse(Some("../etc")).is_err());
+        assert_eq!(Target::Sandbox("work".into()).entry(), "conduit-work");
+        assert_eq!(Target::from_entry("conduit"), Some(Target::Host));
+        assert_eq!(
+            Target::from_entry("conduit-work"),
+            Some(Target::Sandbox("work".into()))
+        );
+        for foreign in ["conduitx", "conduit-", "conduit-Bad_Id", "github", "conduit-host"] {
+            assert_eq!(Target::from_entry(foreign), None, "{foreign}");
+        }
+        assert_eq!(
+            endpoint(6767, &Target::Sandbox("work".into())),
+            "http://127.0.0.1:6767/sandbox/work/mcp"
+        );
+    }
+
+    /// An agent can hold this computer and any number of sandboxes at once,
+    /// and removing one entry never disturbs another — in every format.
+    #[test]
+    fn host_and_sandbox_entries_coexist_in_every_format() {
+        let host_url = endpoint(6767, &Target::Host);
+        let work = Target::Sandbox("work".into());
+        let work_url = endpoint(6767, &work);
+        let sorted = |mut v: Vec<String>| {
+            v.sort();
+            v
+        };
+
+        let json = edit_json(&edit_json("", ENTRY, &host_url, true).unwrap(), &work.entry(), &work_url, true)
+            .unwrap();
+        assert_eq!(sorted(entry_names(&json, Format::JsonMcpServers)), ["conduit", "conduit-work"]);
+        let json = remove_json(&json, &work.entry(), true).unwrap();
+        assert_eq!(entry_names(&json, Format::JsonMcpServers), ["conduit"]);
+
+        let jsonc = edit_json("{ // mine\n}", &work.entry(), &work_url, false).unwrap();
+        let jsonc = edit_json(&jsonc, ENTRY, &host_url, false).unwrap();
+        assert_eq!(sorted(entry_names(&jsonc, Format::JsoncMcp)), ["conduit", "conduit-work"]);
+
+        let toml = edit_toml(&edit_toml("", ENTRY, &host_url).unwrap(), &work.entry(), &work_url).unwrap();
+        assert!(toml.contains("[mcp_servers.conduit-work]"), "{toml}");
+        assert!(toml.contains(&work_url));
+        let toml = remove_toml(&toml, ENTRY).unwrap();
+        assert_eq!(entry_names(&toml, Format::TomlMcpServers), ["conduit-work"]);
+
+        let yaml = edit_yaml(&edit_yaml("other: 1\n", ENTRY, &host_url).unwrap(), &work.entry(), &work_url)
+            .unwrap();
+        assert_eq!(sorted(entry_names(&yaml, Format::YamlMcpServers)), ["conduit", "conduit-work"]);
+        let yaml = remove_yaml(&yaml, &work.entry()).unwrap();
+        assert_eq!(entry_names(&yaml, Format::YamlMcpServers), ["conduit"]);
+        assert!(yaml.contains("other: 1"));
+    }
 
     #[test]
     fn install_backs_up_and_uninstall_restores() {
@@ -756,7 +924,7 @@ mod fs_tests {
         assert!(!row.installed);
 
         // install
-        let after = install("codex", 6767).unwrap();
+        let after = install("codex", 6767, &Target::Host).unwrap();
         assert!(after.installed);
         let text = std::fs::read_to_string(&codex).unwrap();
         assert!(text.contains("[mcp_servers.conduit]"));
@@ -780,7 +948,7 @@ mod fs_tests {
         );
 
         // uninstall
-        let removed = uninstall("codex", 6767).unwrap();
+        let removed = uninstall("codex", 6767, &Target::Host).unwrap();
         assert!(!removed.installed);
         let text = std::fs::read_to_string(&codex).unwrap();
         assert!(!text.contains("conduit"));

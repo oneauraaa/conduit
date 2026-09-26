@@ -288,6 +288,8 @@ export interface ToolCallEvent {
   outcome: "ok" | "denied" | "error" | "blocked";
   detail: string | null;
   durationMs: number | null;
+  /** The sandbox the call ran in; null for this computer. */
+  target: string | null;
 }
 
 /**
@@ -345,10 +347,107 @@ export interface AgentTarget {
   configPath: string;
   /** Whether that agent appears to be installed on this machine. */
   detected: boolean;
-  /** Whether a conduit entry is already present. */
+  /** Whether a conduit entry for this computer is already present. */
   installed: boolean;
+  /** Every machine the agent has an entry for: "host" and sandbox ids. */
+  installedTargets: string[];
   /** Populated when detection or install hit a problem. */
   error: string | null;
   /** data: URL of the vendor app's icon, when that app is installed. */
   icon: string | null;
+}
+
+/* ── sandboxes ──────────────────────────────────────────────── */
+
+export type SandboxOs = "ubuntu-24.04" | "ubuntu-22.04" | "debian-12";
+
+export interface SandboxSpec {
+  /** Immutable: it is in the endpoint URL and in agent configs. */
+  id: string;
+  name: string;
+  os: SandboxOs;
+  memoryMb: number;
+  cpus: number;
+  width: number;
+  height: number;
+  internet: boolean;
+  /** Start when an agent calls a tool while it is stopped. */
+  autoStart: boolean;
+  createdAt: number;
+}
+
+export type NewSandbox = Omit<SandboxSpec, "id" | "createdAt">;
+
+/** A partial edit. The OS is fixed once created. */
+export type SandboxPatch = Partial<Omit<SandboxSpec, "id" | "os" | "createdAt">>;
+
+export type DockerAvailability =
+  | "checking"
+  | "missing"
+  | "notRunning"
+  | "noPermission"
+  | "unsupported"
+  | "ready";
+
+export interface DockerStatus {
+  availability: DockerAvailability;
+  cliPath: string | null;
+  clientVersion: string | null;
+  serverVersion: string | null;
+  /** e.g. "Docker Desktop". */
+  engine: string | null;
+  arch: string | null;
+  /** What the daemon can hand out; the pickers clamp to these. */
+  cpus: number | null;
+  memoryBytes: number | null;
+  /** The next step when not ready, or a caveat when ready. */
+  hint: string | null;
+}
+
+export type SandboxStatus =
+  | "needsImage"
+  | "building"
+  | "stopped"
+  | "starting"
+  | "running"
+  | "stopping"
+  | "error";
+
+export interface ImageBuild {
+  os: SandboxOs;
+  step: number | null;
+  totalSteps: number | null;
+  lastLine: string | null;
+  startedAt: number;
+}
+
+export interface SandboxView {
+  spec: SandboxSpec;
+  status: SandboxStatus;
+  error: string | null;
+  build: ImageBuild | null;
+  /** "stop agent" is latched: calls are refused until resumed. */
+  paused: boolean;
+  /** The MCP URL an agent connects to. */
+  endpoint: string;
+  busyCalls: number;
+}
+
+export interface SandboxesState {
+  docker: DockerStatus;
+  sandboxes: SandboxView[];
+  stopOnQuit: boolean;
+}
+
+/** One step of an agent's work inside a sandbox, for the live view. */
+export interface SandboxActivity {
+  sandboxId: string;
+  tool: string;
+  action: string;
+  agent: string | null;
+  detail: string | null;
+  outcome: "running" | "ok" | "error" | "blocked";
+  x: number | null;
+  y: number | null;
+  at: number;
 }
