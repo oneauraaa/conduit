@@ -44,7 +44,6 @@ pub fn tag(os: SandboxOs) -> String {
 pub fn build_args(os: SandboxOs) -> Vec<String> {
     vec![
         "build".into(),
-        "--progress=plain".into(),
         "--tag".into(),
         tag(os),
         "--label".into(),
@@ -212,5 +211,6 @@ mod tests {
         assert!(args.contains(&"BASE=debian:12".to_string()));
         assert!(args.contains(&"FIREFOX=esr".to_string()));
         assert!(args.contains(&tag(SandboxOs::Debian12)));
+        assert!(!args.iter().any(|arg| arg.starts_with("--progress")));
     }
 }

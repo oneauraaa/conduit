@@ -304,10 +304,23 @@ function DialogRow({ label, children }: { label: string; children: React.ReactNo
 }
 
 function ErrorLine({ text }: { text: string }) {
+  const newline = text.indexOf("\n");
+  const summary = newline === -1 ? text : text.slice(0, newline);
+  const detail = newline === -1 ? "" : text.slice(newline + 1).trim();
   return (
     <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-500/8 px-3 py-2 text-[11px] leading-snug text-red-600 dark:text-red-400">
       <TriangleAlert size={13} className="mt-px shrink-0" />
-      <span className="selectable">{text}</span>
+      <div className="min-w-0 flex-1">
+        <span className="selectable break-words">{summary}</span>
+        {detail && (
+          <details className="mt-2">
+            <summary className="w-fit cursor-pointer select-none font-medium">show details</summary>
+            <pre className="selectable mt-2 max-h-52 overflow-auto rounded-md bg-black/10 p-2 font-mono text-[10px] leading-relaxed whitespace-pre-wrap break-all dark:bg-black/25">
+              {detail}
+            </pre>
+          </details>
+        )}
+      </div>
     </div>
   );
 }
@@ -754,7 +767,7 @@ export function SandboxTab({ onConnectAgent }: { onConnectAgent: (sandboxId: str
         </Button>
       </div>
 
-      {error && <ErrorLine text={error} />}
+      {error && error !== current?.error && <ErrorLine text={error} />}
       {state.docker.hint && (
         <p className="px-0.5 text-[10.5px] text-amber-700 dark:text-amber-300">{state.docker.hint}</p>
       )}

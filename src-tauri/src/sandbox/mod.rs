@@ -32,7 +32,7 @@ mod persist;
 pub mod viewer;
 pub mod xdo;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -1198,6 +1198,7 @@ impl SandboxManager {
         let mut child = cli
             .command()
             .args(image::build_args(os))
+            .env("BUILDKIT_PROGRESS", "plain")
             .stdin(Stdio::piped())
             .spawn()
             .map_err(|e| format!("could not run docker build: {e}"))?;
@@ -1234,7 +1235,7 @@ impl SandboxManager {
         }
         drop(tx);
 
-        let mut tail: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+        let mut tail: VecDeque<String> = VecDeque::new();
         loop {
             tokio::select! {
                 line = rx.recv() => {
@@ -1243,10 +1244,10 @@ impl SandboxManager {
                     if trimmed.is_empty() {
                         continue;
                     }
-                    if tail.len() == 12 {
+                    if tail.len() == 80 {
                         tail.pop_front();
                     }
-                    tail.push_back(trimmed.to_string());
+                    tail.push_back(trimmed.chars().take(500).collect());
                     self.note_build_line(os, trimmed);
                 }
                 _ = cancel.cancelled() => {
@@ -1265,14 +1266,7 @@ impl SandboxManager {
         if status.success() {
             Ok(())
         } else {
-            let why = tail
-                .iter()
-                .rev()
-                .find(|l| l.contains("ERROR") || l.contains("error") || l.contains("failed"))
-                .or_else(|| tail.back())
-                .cloned()
-                .unwrap_or_else(|| "docker build failed".into());
-            Err(format!("the desktop image did not build: {why}"))
+            Err(build_failure(&tail))
         }
     }
 
@@ -1405,6 +1399,29 @@ impl SandboxManager {
     }
 }
 
+/// Keep a useful headline while preserving the bounded Docker output for the
+/// expandable error view.
+fn build_failure(tail: &VecDeque<String>) -> String {
+    let reason = tail
+        .iter()
+        .rev()
+        .find(|line| {
+            let lower = line.to_ascii_lowercase();
+            lower.contains("unknown flag") || lower.contains("error:") || lower.contains("failed")
+        })
+        .or_else(|| tail.back())
+        .map(String::as_str)
+        .unwrap_or("docker build failed without output");
+    if tail.is_empty() {
+        return format!("the desktop image did not build: {reason}");
+    }
+    format!(
+        "the desktop image did not build: {reason}\n\nDocker output (last {} lines):\n{}",
+        tail.len(),
+        tail.iter().cloned().collect::<Vec<_>>().join("\n")
+    )
+}
+
 /// What the UI shows for a sandbox, from its container phase and its image.
 fn derive_status(phase: Phase, building: bool, image: ImageState) -> SandboxStatus {
     match phase {
@@ -1452,6 +1469,19 @@ fn missing_hint() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn build_failure_keeps_the_actual_error_and_output() {
+        let lines = VecDeque::from([
+            "unknown flag: --progress".to_string(),
+            "Usage: docker build [OPTIONS] PATH | URL | -".to_string(),
+            "Run 'docker build --help' for more information".to_string(),
+        ]);
+        let message = build_failure(&lines);
+        assert!(message.starts_with("the desktop image did not build: unknown flag: --progress"));
+        assert!(message.contains("Docker output (last 3 lines):"));
+        assert!(message.contains("Run 'docker build --help' for more information"));
+    }
 
     #[test]
     fn status_prefers_live_phases_then_image_state() {

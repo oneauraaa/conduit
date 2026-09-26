@@ -133,6 +133,21 @@ describe("SandboxTab", () => {
     expect(ipc.cancelSandboxBuild).toHaveBeenCalledWith("lab");
   });
 
+  it("expands the Docker output beneath a failed image build", async () => {
+    ipc.getSandboxState.mockResolvedValue(state([sandbox("lab", {
+      status: "needsImage",
+      error: "the desktop image did not build: unknown flag: --progress\n\nDocker output (last 2 lines):\nunknown flag: --progress\nRun 'docker build --help' for more information",
+    })]));
+    render(<SandboxTab onConnectAgent={() => {}} />);
+
+    expect(await screen.findByText("the desktop image did not build: unknown flag: --progress")).toBeInTheDocument();
+    const details = screen.getByText("show details").closest("details")!;
+    expect(details.open).toBe(false);
+    fireEvent.click(screen.getByText("show details"));
+    expect(details.open).toBe(true);
+    expect(within(details).getByText(/Run 'docker build --help' for more information/)).toBeInTheDocument();
+  });
+
   it("creates a sandbox with sensible defaults and selects it", async () => {
     ipc.getSandboxState.mockResolvedValue(state([]));
     ipc.createSandbox.mockResolvedValue(state([sandbox("work", { status: "starting" })]));
