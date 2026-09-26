@@ -1,6 +1,6 @@
 [package]
 name = "conduit"
-version = "1.0.4"
+version = "1.0.5"
 description = "let ai agents use your computer"
 edition = "2024"
 rust-version = "1.85"

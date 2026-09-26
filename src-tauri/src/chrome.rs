@@ -18,9 +18,9 @@ use crate::platform::types::{Display, OwnWindows};
 /// pill draws its aura as a blurred element inset 12px beyond itself with a
 /// 24px blur, so roughly 40px past the pill's own edge still has ink on it.
 /// The window clips at its bounds, so anything tighter than that turns the
-/// soft falloff into a straight edge and visible corners. 480×300 around a
-/// 352px pill leaves 64px on each side and, with the layout's bottom padding,
-/// about 44px underneath.
+/// soft falloff into a straight edge and visible corners. 480×300 around the
+/// 392px status bar leaves 44px on each side and, with the layout's bottom
+/// padding, about 44px underneath.
 const PILL_W: f64 = 480.0;
 const PILL_H: f64 = 300.0;
 
@@ -257,9 +257,13 @@ mod win_chrome {
 /// created hidden at startup, and a hidden webview can still be mid-load when
 /// the first `control:state` goes out — it would miss that one-shot event and
 /// sit there rendering nothing while cursor updates streamed past it.
-pub fn show_control_chrome(app: &AppHandle<Wry>, state: crate::state::ControlState) {
+pub fn show_control_chrome(app: &AppHandle<Wry>) {
     let app = app.clone();
     let _ = app.clone().run_on_main_thread(move || {
+        if app.state::<crate::state::Shared>().control().phase != crate::state::ControlPhase::Active
+        {
+            return;
+        }
         refresh_displays();
 
         for display in cached_displays() {
@@ -275,27 +279,52 @@ pub fn show_control_chrome(app: &AppHandle<Wry>, state: crate::state::ControlSta
         // apart by window level (1002 over 1001), but Windows orders topmost
         // windows by which was raised most recently — show them the other way
         // round there and the glow covers the stop button.
-        match app.get_webview_window("pill") {
-            Some(pill) => {
-                position_pill(&pill);
-                if let Err(e) = pill.show() {
-                    tracing::warn!("could not show the pill: {e}");
-                }
-                let _ = pill.set_always_on_top(true);
-                tracing::info!(pos = ?pill.outer_position().ok(), "pill shown");
-            }
-            None => tracing::warn!("pill window is missing"),
-        }
+        sync_pill_visibility_on_main(&app);
 
         crate::platform::input::hide_system_cursor();
 
-        let _ = tauri::Emitter::emit(&app, "control:state", &state);
+        let _ = tauri::Emitter::emit(
+            &app,
+            "control:state",
+            app.state::<crate::state::Shared>().control(),
+        );
     });
+}
+
+/// Applies the current action's visibility preference without remapping an
+/// already visible layer surface. Approval cards always remain reachable.
+pub fn sync_pill_visibility(app: &AppHandle<Wry>) {
+    let app = app.clone();
+    let _ = app.clone().run_on_main_thread(move || sync_pill_visibility_on_main(&app));
+}
+
+fn sync_pill_visibility_on_main(app: &AppHandle<Wry>) {
+    let Some(pill) = app.get_webview_window("pill") else {
+        tracing::warn!("pill window is missing");
+        return;
+    };
+    let visible = pill.is_visible().unwrap_or(false);
+    if app.state::<crate::state::Shared>().pill_visible() {
+        if !visible {
+            position_pill(&pill);
+            if let Err(e) = pill.show() {
+                tracing::warn!("could not show the pill: {e}");
+            }
+            let _ = pill.set_always_on_top(true);
+            tracing::info!(pos = ?pill.outer_position().ok(), "pill shown");
+        }
+    } else if visible {
+        let _ = pill.hide();
+    }
 }
 
 pub fn hide_control_chrome(app: &AppHandle<Wry>) {
     let app = app.clone();
     let _ = app.clone().run_on_main_thread(move || {
+        if app.state::<crate::state::Shared>().control().phase == crate::state::ControlPhase::Active
+        {
+            return;
+        }
         for display in cached_displays() {
             if let Some(w) = app.get_webview_window(&overlay_label(display.index)) {
                 let _ = w.hide();

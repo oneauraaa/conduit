@@ -134,8 +134,17 @@ const local: Record<string, (args: Record<string, unknown>) => unknown> = {
     standalone.settings.outlineBrowser = a.enabled as boolean;
     return { ...standalone.settings };
   },
+  set_pill_desktop: (a) => {
+    standalone.settings.pillDesktop = a.enabled as boolean;
+    return { ...standalone.settings };
+  },
+  set_pill_browser: (a) => {
+    standalone.settings.pillBrowser = a.enabled as boolean;
+    return { ...standalone.settings };
+  },
   get_readiness: () => standalone.readiness,
   get_control_state: () => standalone.control,
+  get_pending_approval: () => null,
   set_session_mode: (a) => ({ ...standalone.control, mode: a.mode }),
   resume_control: () => ({ ...standalone.control, stopped: false }),
   list_agents: () => standalone.agents,
@@ -230,6 +239,10 @@ export const setOutlineDesktop = (enabled: boolean) =>
   invoke<Settings>("set_outline_desktop", { enabled });
 export const setOutlineBrowser = (enabled: boolean) =>
   invoke<Settings>("set_outline_browser", { enabled });
+export const setPillDesktop = (enabled: boolean) =>
+  invoke<Settings>("set_pill_desktop", { enabled });
+export const setPillBrowser = (enabled: boolean) =>
+  invoke<Settings>("set_pill_browser", { enabled });
 
 /* ── readiness ──────────────────────────────────────────────── */
 
@@ -245,6 +258,7 @@ export const relaunchElevated = () => invoke<void>("relaunch_elevated");
 /* ── control session ────────────────────────────────────────── */
 
 export const getControlState = () => invoke<ControlState>("get_control_state");
+export const getPendingApproval = () => invoke<PendingApproval | null>("get_pending_approval");
 export const setSessionMode = (mode: AccessMode) =>
   invoke<ControlState>("set_session_mode", { mode });
 export const stopControl = () => invoke<void>("stop_control");

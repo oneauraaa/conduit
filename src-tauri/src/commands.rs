@@ -8,7 +8,7 @@ use crate::mcp::{catalog::ToolDef, server};
 use crate::platform::permissions;
 use crate::state::{
     AccessMode, BrowserPermissionCategory, BrowserPermissionMode, ControlState, Decision,
-    Readiness, ServerState, Settings, Shared, ToolsAccess,
+    PendingApproval, Readiness, ServerState, Settings, Shared, ToolsAccess,
 };
 
 /* ── server ── */
@@ -267,6 +267,16 @@ pub fn set_outline_browser(state: State<'_, Shared>, enabled: bool) -> Settings 
     state.update_settings(|s| s.outline_browser = enabled)
 }
 
+#[tauri::command]
+pub fn set_pill_desktop(state: State<'_, Shared>, enabled: bool) -> Settings {
+    state.update_settings(|s| s.pill_desktop = enabled)
+}
+
+#[tauri::command]
+pub fn set_pill_browser(state: State<'_, Shared>, enabled: bool) -> Settings {
+    state.update_settings(|s| s.pill_browser = enabled)
+}
+
 /// Points the OS's login entry at the current state of the setting.
 ///
 /// ## Why a development build refuses
@@ -399,6 +409,11 @@ pub fn relaunch_elevated(app: AppHandle<Wry>) -> Result<(), String> {
 #[tauri::command]
 pub fn get_control_state(state: State<'_, Shared>) -> ControlState {
     state.control()
+}
+
+#[tauri::command]
+pub fn get_pending_approval(state: State<'_, Shared>) -> Option<PendingApproval> {
+    state.pending_approval()
 }
 
 #[tauri::command]

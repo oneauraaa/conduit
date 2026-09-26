@@ -160,6 +160,12 @@ pub struct Settings {
     /// Show the screen edge glow while the agent uses browser tools.
     #[serde(default)]
     pub outline_browser: bool,
+    /// Show the status pill while the agent uses desktop tools.
+    #[serde(default = "default_true")]
+    pub pill_desktop: bool,
+    /// Show the status pill while the agent uses browser tools.
+    #[serde(default = "default_true")]
+    pub pill_browser: bool,
     /// Browser-specific policy overrides Manual/Auto/Full for these four data
     /// boundaries. Hard tool gates and Panic Stop still win.
     #[serde(default)]
@@ -186,6 +192,8 @@ impl Default for Settings {
             browser_auto_start: true,
             outline_desktop: true,
             outline_browser: false,
+            pill_desktop: true,
+            pill_browser: true,
             browser_permissions: BrowserPermissions::default(),
         }
     }
@@ -196,6 +204,14 @@ fn default_true() -> bool {
 }
 
 impl Settings {
+    pub fn show_pill(&self, browser_action: bool) -> bool {
+        if browser_action {
+            self.pill_browser
+        } else {
+            self.pill_desktop
+        }
+    }
+
     /// Whether `tool` may run right now, ignoring the approval question.
     pub fn tool_enabled(&self, tool: &str) -> bool {
         match self.tools_access {
@@ -285,6 +301,7 @@ pub struct ToolCallEvent {
 }
 
 struct ApprovalWaiter {
+    request: PendingApproval,
     browser: bool,
     sender: oneshot::Sender<Decision>,
 }
@@ -503,6 +520,7 @@ impl AppState {
         };
         crate::store::save(&self.app, &next);
         let _ = self.app.emit("settings:changed", &next);
+        crate::chrome::sync_pill_visibility(&self.app);
         next
     }
 
@@ -529,6 +547,14 @@ impl AppState {
         self.control.read().clone()
     }
 
+    pub fn pill_visible(&self) -> bool {
+        pill_should_be_visible(
+            &self.control(),
+            &self.settings(),
+            !self.approvals.read().is_empty(),
+        )
+    }
+
     pub fn update_control(&self, f: impl FnOnce(&mut ControlState)) -> ControlState {
         let next = {
             let mut c = self.control.write();
@@ -550,14 +576,14 @@ impl AppState {
             // retrying. Only `resume` unlatches.
             self.session_allows.write().clear();
             let mode = self.settings().default_access;
-            let next = self.update_control(|c| {
+            self.update_control(|c| {
                 c.phase = ControlPhase::Active;
                 c.agent = agent.clone();
                 c.mode = mode;
                 c.action = Some(action.to_string());
                 c.browser_action = browser_action;
             });
-            crate::chrome::show_control_chrome(&self.app, next);
+            crate::chrome::show_control_chrome(&self.app);
         } else {
             self.update_control(|c| {
                 if c.agent.is_none() {
@@ -566,6 +592,7 @@ impl AppState {
                 c.action = Some(action.to_string());
                 c.browser_action = browser_action;
             });
+            crate::chrome::sync_pill_visibility(&self.app);
         }
     }
 
@@ -623,6 +650,14 @@ impl AppState {
         self.session_allows.read().iter().any(|t| t == tool)
     }
 
+    pub fn pending_approval(&self) -> Option<PendingApproval> {
+        self.approvals
+            .read()
+            .values()
+            .next()
+            .map(|waiter| waiter.request.clone())
+    }
+
     pub fn allow_for_session(&self, tool: &str) {
         let mut a = self.session_allows.write();
         if !a.iter().any(|t| t == tool) {
@@ -645,11 +680,13 @@ impl AppState {
         self.approvals.write().insert(
             req.id.clone(),
             ApprovalWaiter {
+                request: req.clone(),
                 browser,
                 sender: tx,
             },
         );
         let _ = self.app.emit("control:approval", Some(&req));
+        crate::chrome::sync_pill_visibility(&self.app);
         rx
     }
 
@@ -657,7 +694,8 @@ impl AppState {
         if let Some(waiter) = self.approvals.write().remove(id) {
             let _ = waiter.sender.send(decision);
         }
-        let _ = self.app.emit("control:approval", Option::<PendingApproval>::None);
+        let _ = self.app.emit("control:approval", self.pending_approval());
+        crate::chrome::sync_pill_visibility(&self.app);
     }
 
     /// Denies only browser-related approval cards. Browser Stop and Restart
@@ -678,13 +716,15 @@ impl AppState {
             }
         }
         drop(approvals);
-        let _ = self.app.emit("control:approval", Option::<PendingApproval>::None);
+        let _ = self.app.emit("control:approval", self.pending_approval());
+        crate::chrome::sync_pill_visibility(&self.app);
     }
 
     /// Drops a request that timed out, so the map doesn't grow unbounded.
     pub fn close_approval(&self, id: &str) {
         self.approvals.write().remove(id);
-        let _ = self.app.emit("control:approval", Option::<PendingApproval>::None);
+        let _ = self.app.emit("control:approval", self.pending_approval());
+        crate::chrome::sync_pill_visibility(&self.app);
     }
 
     /* ── logging ── */
@@ -708,6 +748,15 @@ impl AppState {
         };
         let _ = self.app.emit("server:tool-call", &event);
     }
+}
+
+fn pill_should_be_visible(
+    control: &ControlState,
+    settings: &Settings,
+    approval_pending: bool,
+) -> bool {
+    control.phase == ControlPhase::Active
+        && (settings.show_pill(control.browser_action) || approval_pending)
 }
 
 pub struct ActiveCallGuard<'a> {
@@ -742,16 +791,58 @@ mod tests {
     use super::*;
 
     #[test]
-    fn older_settings_get_browser_and_outline_defaults() {
+    fn older_settings_get_browser_outline_and_pill_defaults() {
         let mut saved = serde_json::to_value(Settings::default()).unwrap();
         let object = saved.as_object_mut().unwrap();
         object.remove("browserAutoStart");
         object.remove("outlineDesktop");
         object.remove("outlineBrowser");
+        object.remove("pillDesktop");
+        object.remove("pillBrowser");
         let loaded: Settings = serde_json::from_value(saved).unwrap();
         assert!(loaded.browser_auto_start);
         assert!(loaded.outline_desktop);
         assert!(!loaded.outline_browser);
+        assert!(loaded.pill_desktop);
+        assert!(loaded.pill_browser);
+    }
+
+    #[test]
+    fn pill_preference_follows_action_type() {
+        let settings = Settings {
+            pill_desktop: false,
+            pill_browser: true,
+            ..Settings::default()
+        };
+        assert!(!settings.show_pill(false));
+        assert!(settings.show_pill(true));
+    }
+
+    #[test]
+    fn approval_stays_visible_when_the_status_pill_is_hidden() {
+        let settings = Settings {
+            pill_desktop: false,
+            pill_browser: false,
+            ..Settings::default()
+        };
+        let control = ControlState {
+            phase: ControlPhase::Active,
+            agent: None,
+            mode: AccessMode::Full,
+            action: None,
+            browser_action: true,
+            stopped: false,
+        };
+        assert!(!pill_should_be_visible(&control, &settings, false));
+        assert!(pill_should_be_visible(&control, &settings, true));
+        assert!(!pill_should_be_visible(
+            &ControlState {
+                phase: ControlPhase::Idle,
+                ..control
+            },
+            &settings,
+            true,
+        ));
     }
 
     /// The UI reads these keys by name. A mismatch is invisible on the Rust

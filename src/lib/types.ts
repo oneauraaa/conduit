@@ -67,6 +67,8 @@ export interface Settings {
   browserAutoStart: boolean;
   outlineDesktop: boolean;
   outlineBrowser: boolean;
+  pillDesktop: boolean;
+  pillBrowser: boolean;
   browserPermissions: BrowserPermissions;
 }
 

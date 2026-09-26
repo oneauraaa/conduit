@@ -4,6 +4,7 @@ import { Check, ChevronUp, Lock, Square, X } from "lucide-react";
 import { Logo } from "@/components/Logo";
 import {
   getControlState,
+  getPendingApproval,
   resolveApproval,
   setSessionMode,
   stopControl,
@@ -71,12 +72,23 @@ export function Pill() {
     // A forced demo state must not be overwritten by the initial sync.
     if (demo) return;
 
-    void getControlState().then(setControl).catch(() => {});
+    let stateEventSeen = false;
+    let approvalEventSeen = false;
     const offState = subscribe("control:state", (s) => {
+      stateEventSeen = true;
       setControl(s);
       if (s.phase === "idle") setOpen(false);
     });
-    const offApproval = subscribe("control:approval", setApproval);
+    const offApproval = subscribe("control:approval", (next) => {
+      approvalEventSeen = true;
+      setApproval(next);
+    });
+    void getControlState().then((s) => {
+      if (!stateEventSeen) setControl(s);
+    }).catch(() => {});
+    void getPendingApproval().then((next) => {
+      if (!approvalEventSeen) setApproval(next);
+    }).catch(() => {});
     return () => {
       offState();
       offApproval();
@@ -92,18 +104,8 @@ export function Pill() {
     // window clipped straight through it, and the soft falloff became a hard
     // line with corners. Keep this and `PILL_H` in `chrome.rs` in step.
     <div className="flex h-full w-full items-end justify-center overflow-hidden pb-10">
-      {/* Skipping the entry animation in demo mode keeps headless screenshots
-          from catching the pill mid-flight at opacity 0. */}
-      <AnimatePresence initial={!demo}>
-        {active && (
-          <motion.div
-            key="pill"
-            initial={{ y: 64, opacity: 0, scale: 0.92 }}
-            animate={{ y: 0, opacity: 1, scale: 1 }}
-            exit={{ y: 64, opacity: 0, scale: 0.92 }}
-            transition={{ type: "spring", stiffness: 420, damping: 34, mass: 0.8 }}
-            className="relative flex flex-col items-stretch"
-          >
+      {active && (
+          <div className="relative flex w-[392px] flex-col items-stretch">
             {/* The glow is a sibling behind the pill so blur never touches text. */}
             <div
               aria-hidden
@@ -125,7 +127,7 @@ export function Pill() {
                   animate={{ opacity: 1, scale: 1 }}
                   exit={{ opacity: 0, scale: 0.95 }}
                   transition={{ type: "spring", stiffness: 420, damping: 34 }}
-                  className="relative w-[352px] overflow-hidden rounded-3xl border border-white/14 bg-[rgb(6_14_30/0.94)] shadow-[0_12px_40px_rgb(0_0_0/0.5)] backdrop-blur-2xl"
+                  className="relative mx-auto w-[352px] overflow-hidden rounded-3xl border border-white/14 bg-[rgb(6_14_30/0.94)] shadow-[0_12px_40px_rgb(0_0_0/0.5)] backdrop-blur-2xl"
                 >
                   <ApprovalCard approval={approval} />
                 </motion.div>
@@ -189,28 +191,19 @@ export function Pill() {
                     )}
                   </AnimatePresence>
 
-                  <div className="relative flex items-center gap-2.5 rounded-full border border-white/14 bg-[rgb(6_14_30/0.9)] py-1.5 pr-1.5 pl-3 shadow-[0_8px_28px_rgb(0_0_0/0.45)] backdrop-blur-2xl">
+                  <div className="relative flex w-full items-center gap-2.5 rounded-full border border-white/14 bg-[rgb(6_14_30/0.9)] py-1.5 pr-1.5 pl-3 shadow-[0_8px_28px_rgb(0_0_0/0.45)] backdrop-blur-2xl">
                     <span className="relative flex items-center">
                       <span className="absolute inset-0 animate-breathe rounded-full bg-[var(--color-aqua)] opacity-50 blur-md" />
                       <Logo size={17} animated className="relative" />
                     </span>
 
-                    <span className="flex items-baseline gap-1.5 whitespace-nowrap">
-                      <span className="text-[12.5px] font-semibold text-white lowercase">
+                    <span className="flex min-w-0 flex-1 items-baseline gap-1.5 whitespace-nowrap">
+                      <span className="max-w-[90px] shrink-0 truncate text-[12.5px] font-semibold text-white lowercase" title={control.agent ?? undefined}>
                         {control.agent ?? "an agent"}
                       </span>
-                      <AnimatePresence mode="wait" initial={false}>
-                        <motion.span
-                          key={control.action ?? "idle"}
-                          initial={{ opacity: 0, y: 4 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          exit={{ opacity: 0, y: -4 }}
-                          transition={{ duration: 0.16 }}
-                          className="text-[11.5px] text-[var(--color-sky)] lowercase"
-                        >
-                          {control.action ?? "is in control"}
-                        </motion.span>
-                      </AnimatePresence>
+                      <span className="min-w-0 truncate text-[11.5px] text-[var(--color-sky)] lowercase" title={control.action ?? undefined}>
+                        {control.action ?? "is in control"}
+                      </span>
                     </span>
 
                     <span className="mx-0.5 h-4 w-px bg-white/15" />
@@ -239,9 +232,8 @@ export function Pill() {
                 </motion.div>
               )}
             </AnimatePresence>
-          </motion.div>
+          </div>
         )}
-      </AnimatePresence>
     </div>
   );
 }

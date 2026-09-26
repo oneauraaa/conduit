@@ -110,9 +110,10 @@ Profiles keep cookies, sessions, and Conduit-recorded navigation history;
 Incognito data is removed whenever Chromium stops.
 
 An installed Chromium starts with Conduit by default. Settings can turn that
-off, choose whether the screen edge outline appears during desktop or browser
-actions, and uninstall the managed Chromium runtime. Uninstalling keeps browser
-profiles and saved website downloads for a later reinstall.
+off, choose separately whether the screen edge outline and status pill appear
+during desktop or browser actions, and uninstall the managed Chromium runtime.
+Approval requests still show when the status pill is hidden. Uninstalling keeps
+browser profiles and saved website downloads for a later reinstall.
 
 Four Browser-tab policies override Manual/Auto/Full for their own boundaries:
 

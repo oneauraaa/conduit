@@ -1,5 +1,4 @@
-import { useEffect, useRef, useState } from "react";
-import { AnimatePresence, motion } from "motion/react";
+import { useEffect, useState } from "react";
 import { getControlState, getSettings, subscribe } from "@/lib/ipc";
 import type { ControlState, Settings } from "@/lib/types";
 import { isStandalone } from "@/lib/standalone";
@@ -32,19 +31,27 @@ export function Overlay() {
   const showOutline = demo || (active && (control?.browserAction
     ? settings?.outlineBrowser ?? false
     : settings?.outlineDesktop ?? true));
-  const mounted = useRef(false);
-
   useEffect(() => {
     if (demo) return;
-    mounted.current = true;
     // Pull the current state as well as subscribing: this webview is created
     // hidden at startup and may come up after a session has already begun.
-    void getControlState().then(setControl).catch(() => {});
-    void getSettings().then(setSettings).catch(() => {});
-    const off = subscribe("control:state", setControl);
-    const offSettings = subscribe("settings:changed", setSettings);
+    let stateEventSeen = false;
+    let settingsEventSeen = false;
+    const off = subscribe("control:state", (state) => {
+      stateEventSeen = true;
+      setControl(state);
+    });
+    const offSettings = subscribe("settings:changed", (next) => {
+      settingsEventSeen = true;
+      setSettings(next);
+    });
+    void getControlState().then((state) => {
+      if (!stateEventSeen) setControl(state);
+    }).catch(() => {});
+    void getSettings().then((next) => {
+      if (!settingsEventSeen) setSettings(next);
+    }).catch(() => {});
     return () => {
-      mounted.current = false;
       off();
       offSettings();
     };
@@ -54,20 +61,11 @@ export function Overlay() {
     <div className="pointer-events-none fixed inset-0 overflow-hidden">
       {demo && <DemoDesktop />}
 
-      <AnimatePresence initial={!demo}>
-        {showOutline && (
-          <motion.div
-            key="glow"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
-            className="absolute inset-0"
-          >
-            <EdgeGlow />
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {showOutline && (
+        <div className="absolute inset-0">
+          <EdgeGlow />
+        </div>
+      )}
 
       <AiCursor active={active} demo={demo} />
     </div>

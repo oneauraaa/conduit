@@ -21,6 +21,8 @@ import {
   setCorsOrigins,
   setOutlineBrowser,
   setOutlineDesktop,
+  setPillBrowser,
+  setPillDesktop,
   setStartHidden,
   setStartOnLogin,
   subscribe,
@@ -67,6 +69,7 @@ export function SettingsTab() {
   const [error, setError] = useState<string | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
   const [browserError, setBrowserError] = useState<string | null>(null);
+  const [appearanceError, setAppearanceError] = useState<string | null>(null);
   const [removingBrowser, setRemovingBrowser] = useState(false);
 
   useEffect(() => {
@@ -105,6 +108,15 @@ export function SettingsTab() {
       setBrowserError(null);
     } catch (reason) {
       setBrowserError(String(reason));
+    }
+  }
+
+  async function updateAppearanceSetting(update: () => Promise<Settings>) {
+    try {
+      setSettings(await update());
+      setAppearanceError(null);
+    } catch (reason) {
+      setAppearanceError(String(reason));
     }
   }
 
@@ -205,7 +217,7 @@ export function SettingsTab() {
           >
             <Switch
               checked={settings?.outlineDesktop ?? true}
-              onChange={(enabled) => void updateBrowserSetting(() => setOutlineDesktop(enabled))}
+              onChange={(enabled) => void updateAppearanceSetting(() => setOutlineDesktop(enabled))}
               label="show outline for desktop actions"
             />
           </Row>
@@ -216,11 +228,40 @@ export function SettingsTab() {
           >
             <Switch
               checked={settings?.outlineBrowser ?? false}
-              onChange={(enabled) => void updateBrowserSetting(() => setOutlineBrowser(enabled))}
+              onChange={(enabled) => void updateAppearanceSetting(() => setOutlineBrowser(enabled))}
               label="show outline for browser actions"
             />
           </Row>
         </Card>
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <SectionLabel>agent pill</SectionLabel>
+        <Card>
+          <Row
+            icon={<Monitor size={15} />}
+            title="desktop actions"
+            description="show the status pill while an agent uses desktop tools"
+          >
+            <Switch
+              checked={settings?.pillDesktop ?? true}
+              onChange={(enabled) => void updateAppearanceSetting(() => setPillDesktop(enabled))}
+              label="show pill for desktop actions"
+            />
+          </Row>
+          <Row
+            icon={<PanelsTopLeft size={15} />}
+            title="browser actions"
+            description="show the status pill while an agent uses the built-in browser; approval requests still appear"
+          >
+            <Switch
+              checked={settings?.pillBrowser ?? true}
+              onChange={(enabled) => void updateAppearanceSetting(() => setPillBrowser(enabled))}
+              label="show pill for browser actions"
+            />
+          </Row>
+        </Card>
+        {appearanceError && <p role="alert" className="px-1 text-[11px] text-red-500">{appearanceError}</p>}
       </div>
 
       <div className="flex flex-col gap-2">

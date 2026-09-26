@@ -10,6 +10,8 @@ const ipc = vi.hoisted(() => ({
   setBrowserAutoStart: vi.fn(),
   setOutlineDesktop: vi.fn(),
   setOutlineBrowser: vi.fn(),
+  setPillDesktop: vi.fn(),
+  setPillBrowser: vi.fn(),
   setCorsEnabled: vi.fn(),
   setCorsOrigins: vi.fn(),
   uninstallBrowser: vi.fn(),
@@ -27,6 +29,8 @@ beforeEach(() => {
     install: { ...sampleBrowser.install, status: "ready", installedRevision: "test" },
   });
   ipc.setOutlineBrowser.mockResolvedValue({ ...sampleSettings, outlineBrowser: true });
+  ipc.setPillDesktop.mockResolvedValue({ ...sampleSettings, pillDesktop: false });
+  ipc.setPillBrowser.mockResolvedValue({ ...sampleSettings, pillBrowser: false });
   ipc.setBrowserAutoStart.mockResolvedValue({ ...sampleSettings, browserAutoStart: false });
   ipc.uninstallBrowser.mockResolvedValue({
     ...sampleBrowser,
@@ -49,4 +53,13 @@ it("saves outline and auto start preferences and uninstalls the managed browser"
   expect(confirm).toHaveBeenCalledOnce();
   await waitFor(() => expect(ipc.uninstallBrowser).toHaveBeenCalledOnce());
   await waitFor(() => expect(screen.getByRole("button", { name: "uninstall" })).toBeDisabled());
+});
+
+it("saves separate pill visibility preferences", async () => {
+  render(<SettingsTab />);
+
+  fireEvent.click(await screen.findByRole("switch", { name: "show pill for desktop actions" }));
+  await waitFor(() => expect(ipc.setPillDesktop).toHaveBeenCalledWith(false));
+  fireEvent.click(screen.getByRole("switch", { name: "show pill for browser actions" }));
+  await waitFor(() => expect(ipc.setPillBrowser).toHaveBeenCalledWith(false));
 });
