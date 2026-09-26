@@ -248,9 +248,13 @@ def scenarios():
     # Auto requests, exact grants, denials, and withdrawn permission.
     risky=[
         ('shell-list','List the files in the current directory.','run_shell',{'command':'ls','timeout_seconds':30},'May I run `ls` to list this directory? Auto Mode gates all shell calls.','exit 0\n\nREADME.md\nsrc','The directory contains README.md and src.', ['hyprland','plasma','macos']),
+        ('shell-fish','Fish is installed. Use fish to uppercase “conduit”.','run_shell',{'command':'string upper conduit','shell':'fish','timeout_seconds':30},'May I run `string upper conduit` using fish? Auto Mode gates all shell calls.','exit 0\n\nCONDUIT','Fish returned CONDUIT.', ['hyprland','plasma','gnome']),
+        ('shell-zsh','Zsh is installed. Use its print builtin to output “conduit”.','run_shell',{'command':'print -r -- conduit','shell':'zsh','timeout_seconds':30},'May I run `print -r -- conduit` using zsh? Auto Mode gates all shell calls.','exit 0\n\nconduit','Zsh printed conduit.', ['hyprland','plasma','gnome']),
         ('shell-build','Run the project build with npm run build.','run_shell',{'command':'npm run build','timeout_seconds':300},'May I run `npm run build`? It executes project scripts and may write build files.','exit 0\n\nBuild completed.','The build command completed successfully.',None),
         ('shell-clean','Delete only ./preview.tmp.','run_shell',{'command':'rm -- ./preview.tmp','timeout_seconds':30},'May I delete exactly `./preview.tmp` using `rm -- ./preview.tmp`?','exit 0\n\n(no output)','The deletion command completed successfully.',['hyprland','plasma','macos']),
         ('shell-powershell','List the files in this directory using PowerShell.','run_shell',{'command':'Get-ChildItem -Name','timeout_seconds':30},'May I run `Get-ChildItem -Name`? Auto Mode gates even read-only shell calls.','exit 0\n\nNotes.txt','The directory listing contains Notes.txt.',['windows']),
+        ('folder-project','Create /home/you/Projects/demo/screenshots and any missing parent folders.','create_folder',{'path':'/home/you/Projects/demo/screenshots'},'May I create /home/you/Projects/demo/screenshots and its missing parents?','folder ready: /home/you/Projects/demo/screenshots','The folder is ready at /home/you/Projects/demo/screenshots.',['hyprland','plasma','gnome']),
+        ('folder-windows','Create C:\\Users\\you\\Documents\\Reports.','create_folder',{'path':'C:\\Users\\you\\Documents\\Reports'},'May I create C:\\Users\\you\\Documents\\Reports and its missing parents?','folder ready: C:\\Users\\you\\Documents\\Reports','The Reports folder is ready.',['windows']),
         ('quit-calculator','Quit Calculator.','quit_app',{'name':'Calculator'},'May I ask Calculator to quit? It may prompt about unsaved work.','asked Calculator to quit','Calculator was asked to quit.',['plasma','macos','windows']),
         ('quit-browser','Quit Firefox.','quit_app',{'name':'Firefox'},'May I ask Firefox to quit? Open tabs or work may be affected.','asked Firefox to quit','Firefox was asked to quit.',None),
         ('clipboard-agenda','Copy “Agenda” to the clipboard.','clipboard_write',{'text':'Agenda'},'May I replace the current clipboard contents with “Agenda”?','clipboard updated','The clipboard was updated to “Agenda”.',None),
@@ -371,7 +375,7 @@ def scenarios():
     add('no-tools-needed','What does the scroll tool’s positive dy mean?',[
         A('Positive dy scrolls up; negative dy scrolls down.')],menu='pointer',policy='explain')
     add('mode-explanation','Which actions does Auto Mode ask about?',[
-        A('Conduit’s Auto Mode gates run_shell, quit_app, and clipboard_write unless a session grant applies. Even read-only run_shell calls go through that gate. Manual gates every tool; Full Access removes the routine card.')],menu='system',policy='explain')
+        A('Conduit’s Auto Mode gates run_shell, create_folder, quit_app, and clipboard_write unless a session grant applies. Even read-only run_shell calls go through that gate. Manual gates every tool; Full Access removes the routine card.')],menu='system',policy='explain')
 
     add('changed-clipboard-scope','Set the clipboard to “Draft”.',[
         G('May I overwrite the clipboard with “Draft”?','Yes, only with Draft.',

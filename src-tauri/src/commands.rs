@@ -75,14 +75,12 @@ pub fn set_default_access(state: State<'_, Shared>, mode: AccessMode) -> Setting
 
 #[tauri::command]
 pub fn set_tools_access(state: State<'_, Shared>, access: ToolsAccess) -> Settings {
-    state.update_settings(|s| s.tools_access = access)
+    state.update_settings(|s| s.set_tools_access(access))
 }
 
 #[tauri::command]
 pub fn set_tool_enabled(state: State<'_, Shared>, tool: String, enabled: bool) -> Settings {
-    state.update_settings(|s| {
-        s.tool_toggles.insert(tool, enabled);
-    })
+    state.update_settings(|s| s.set_tool_enabled(tool, enabled))
 }
 
 /* ── built-in browser ── */
@@ -268,6 +266,11 @@ pub fn set_outline_browser(state: State<'_, Shared>, enabled: bool) -> Settings 
 }
 
 #[tauri::command]
+pub fn set_outline_background(state: State<'_, Shared>, enabled: bool) -> Settings {
+    state.update_settings(|s| s.outline_background = enabled)
+}
+
+#[tauri::command]
 pub fn set_pill_desktop(state: State<'_, Shared>, enabled: bool) -> Settings {
     state.update_settings(|s| s.pill_desktop = enabled)
 }
@@ -275,6 +278,11 @@ pub fn set_pill_desktop(state: State<'_, Shared>, enabled: bool) -> Settings {
 #[tauri::command]
 pub fn set_pill_browser(state: State<'_, Shared>, enabled: bool) -> Settings {
     state.update_settings(|s| s.pill_browser = enabled)
+}
+
+#[tauri::command]
+pub fn set_pill_background(state: State<'_, Shared>, enabled: bool) -> Settings {
+    state.update_settings(|s| s.pill_background = enabled)
 }
 
 /// Points the OS's login entry at the current state of the setting.

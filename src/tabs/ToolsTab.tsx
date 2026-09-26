@@ -32,6 +32,7 @@ const GROUPS: { id: ToolGroup; label: string; icon: typeof Eye }[] = [
   { id: "windows", label: "windows & apps", icon: AppWindow },
   { id: "accessibility", label: "accessibility", icon: Accessibility },
   { id: "system", label: "system", icon: Terminal },
+  { id: "linux", label: "linux tools", icon: Terminal },
   { id: "browser", label: "browser", icon: Globe2 },
 ];
 
@@ -57,9 +58,9 @@ export function ToolsTab() {
 
   if (!settings) return <TabShell />;
 
-  // In `all` and `off` the per-tool switches are decorative — the master gate
-  // already decided. Only `custom` hands control back to the individual rows.
-  const locked = settings.toolsAccess !== "custom";
+  // A switch in "all tools" moves access to custom; the last enabled switch
+  // moves it back. "off" keeps the master gate closed.
+  const locked = settings.toolsAccess === "off";
   const isOn = (t: ToolDef) =>
     settings.toolsAccess === "all"
       ? true
@@ -94,7 +95,7 @@ export function ToolsTab() {
           <Segmented
             value={settings.toolsAccess}
             options={TOOLS_ACCESS_OPTIONS}
-            onChange={(a) => void setToolsAccess(a)}
+            onChange={(a) => void setToolsAccess(a).then(setSettings)}
             size="sm"
           />
         </Row>
@@ -135,7 +136,7 @@ export function ToolsTab() {
                     <Switch
                       checked={isOn(t)}
                       disabled={locked}
-                      onChange={(v) => void setToolEnabled(t.name, v)}
+                      onChange={(v) => void setToolEnabled(t.name, v).then(setSettings)}
                       label={t.name}
                     />
                   </Row>

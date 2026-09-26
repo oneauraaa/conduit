@@ -14,7 +14,7 @@ Looking at the screen, moving a cursor, clicking, typing.
 
 ---
 
-conduit **is** the MCP server. It exposes 24 computer-use tools on localhost, so
+conduit **is** the MCP server. It exposes 25 tools on localhost, so
 any agent — Claude Code, Codex, Hermes, OpenClaw — can drive the machine, but
 only while conduit is running. Quit it from the tray and the endpoint dies with
 it. That is the security model, and it is why the window's `x` hides to the tray
@@ -62,6 +62,12 @@ conduit:
   (`sudo usermod -aG input $USER`). Until then the pill's stop button is the way
   to take control back.
 
+On Linux, the Tools tab places `run_shell` under **linux tools**. Agents can set
+its optional `shell` argument to any installed shell name on `PATH` (such as
+`bash`, `zsh`, or `fish`) or an executable path. Without it, commands still use
+the user's `$SHELL`, falling back to `/bin/sh` if unset. The same `run_shell`
+switch and approval rules apply whichever shell the agent chooses.
+
 ## Connect an agent
 
 The Agents tab installs the endpoint with one click, backing the existing config
@@ -84,7 +90,7 @@ tools access → per-tool switch → mode → run and log.
 | mode | behaviour |
 |---|---|
 | manual | every action waits for approval |
-| auto | reads run; `run_shell`, `clipboard_write`, `quit_app` ask |
+| auto | reads run; `run_shell`, `create_folder`, `clipboard_write`, `quit_app` ask |
 | full access *(default)* | nothing asks |
 
 Three things stay out of an agent's reach by construction: the tool allowlist
@@ -101,8 +107,8 @@ visit drive the machine.
 The Browser tab can install a separate, platform-specific Chromium bundle. The
 main Conduit download stays browser-free; until the required revision is
 installed, the tab shows only the download/update panel and agents continue to
-see the original 24 tools. A verified install adds 20 browser tools dynamically
-for a total of 44.
+see the original 25 tools. A verified install adds 20 browser tools dynamically
+for a total of 45.
 
 Chromium defaults to headless mode with a view-only preview that streams only
 while the Browser tab is visible. Visible mode opens a normal Chromium window.

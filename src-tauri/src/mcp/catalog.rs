@@ -13,7 +13,16 @@ pub enum ToolGroup {
     Windows,
     Accessibility,
     System,
+    Linux,
     Browser,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ActionSurface {
+    Desktop,
+    Browser,
+    Background,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -79,6 +88,7 @@ pub static CATALOG: &[ToolDef] = &[
     tool("clipboard_read", System, "read the clipboard's text", false),
     tool("clipboard_write", System, "replace the clipboard's text", true),
     tool("run_shell", System, "run a shell command and capture its output", true),
+    tool("create_folder", System, "create a folder and missing parents at an absolute path", true),
     tool("wait", System, "pause, to let the ui settle", false),
     tool("notify", System, "post a notification", false),
     tool(
@@ -118,6 +128,20 @@ pub fn is_risky(name: &str) -> bool {
     find(name).is_some_and(|t| t.risky)
 }
 
+pub fn action_surface(name: &str) -> ActionSurface {
+    if name.starts_with("browser_") {
+        ActionSurface::Browser
+    } else if matches!(
+        name,
+        "web_search" | "clipboard_read" | "clipboard_write" | "run_shell"
+            | "create_folder" | "wait" | "notify" | "list_keybinds"
+    ) {
+        ActionSurface::Background
+    } else {
+        ActionSurface::Desktop
+    }
+}
+
 /// Present-tense label shown in the pill while the tool runs.
 pub fn action_label(name: &str) -> &'static str {
     match name {
@@ -140,6 +164,7 @@ pub fn action_label(name: &str) -> &'static str {
         "clipboard_read" => "reading the clipboard",
         "clipboard_write" => "writing the clipboard",
         "run_shell" => "running a command",
+        "create_folder" => "creating a folder",
         "wait" => "waiting",
         "notify" => "sending a notification",
         "list_keybinds" => "reading your shortcuts",
@@ -182,6 +207,7 @@ pub fn approval_summary(name: &str) -> String {
         "clipboard_read" => "read your clipboard",
         "clipboard_write" => "overwrite your clipboard",
         "run_shell" => "run a shell command",
+        "create_folder" => "create a folder",
         "notify" => "send a notification",
         "list_keybinds" => "read your keyboard shortcuts",
         "browser_navigate" | "browser_navigate_back" => "open a website",
@@ -216,5 +242,14 @@ mod tests {
         assert!(!definition.risky);
         assert_eq!(action_label("web_search"), "searching DuckDuckGo");
         assert_eq!(approval_summary("web_search"), "wants to search the web");
+    }
+
+    #[test]
+    fn shell_and_folder_are_background_actions_but_screen_tools_are_desktop_actions() {
+        assert_eq!(action_surface("run_shell"), ActionSurface::Background);
+        assert_eq!(action_surface("create_folder"), ActionSurface::Background);
+        assert_eq!(action_surface("click"), ActionSurface::Desktop);
+        assert_eq!(action_surface("browser_click"), ActionSurface::Browser);
+        assert!(is_risky("create_folder"));
     }
 }

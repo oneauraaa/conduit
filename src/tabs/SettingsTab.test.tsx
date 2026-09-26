@@ -10,8 +10,10 @@ const ipc = vi.hoisted(() => ({
   setBrowserAutoStart: vi.fn(),
   setOutlineDesktop: vi.fn(),
   setOutlineBrowser: vi.fn(),
+  setOutlineBackground: vi.fn(),
   setPillDesktop: vi.fn(),
   setPillBrowser: vi.fn(),
+  setPillBackground: vi.fn(),
   setCorsEnabled: vi.fn(),
   setCorsOrigins: vi.fn(),
   uninstallBrowser: vi.fn(),
@@ -29,8 +31,10 @@ beforeEach(() => {
     install: { ...sampleBrowser.install, status: "ready", installedRevision: "test" },
   });
   ipc.setOutlineBrowser.mockResolvedValue({ ...sampleSettings, outlineBrowser: true });
+  ipc.setOutlineBackground.mockResolvedValue({ ...sampleSettings, outlineBackground: true });
   ipc.setPillDesktop.mockResolvedValue({ ...sampleSettings, pillDesktop: false });
   ipc.setPillBrowser.mockResolvedValue({ ...sampleSettings, pillBrowser: false });
+  ipc.setPillBackground.mockResolvedValue({ ...sampleSettings, pillBackground: true });
   ipc.setBrowserAutoStart.mockResolvedValue({ ...sampleSettings, browserAutoStart: false });
   ipc.uninstallBrowser.mockResolvedValue({
     ...sampleBrowser,
@@ -62,4 +66,16 @@ it("saves separate pill visibility preferences", async () => {
   await waitFor(() => expect(ipc.setPillDesktop).toHaveBeenCalledWith(false));
   fireEvent.click(screen.getByRole("switch", { name: "show pill for browser actions" }));
   await waitFor(() => expect(ipc.setPillBrowser).toHaveBeenCalledWith(false));
+});
+
+it("defaults background visibility off and saves both preferences", async () => {
+  render(<SettingsTab />);
+  const outline = await screen.findByRole("switch", { name: "show outline for background actions" });
+  const pill = screen.getByRole("switch", { name: "show pill for background actions" });
+  expect(outline).not.toBeChecked();
+  expect(pill).not.toBeChecked();
+  fireEvent.click(outline);
+  await waitFor(() => expect(ipc.setOutlineBackground).toHaveBeenCalledWith(true));
+  fireEvent.click(pill);
+  await waitFor(() => expect(ipc.setPillBackground).toHaveBeenCalledWith(true));
 });

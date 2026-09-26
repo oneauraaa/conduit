@@ -74,5 +74,5 @@ const _: () = {
     let _: fn(&str, &str) -> Result<(), String> = apps::notify;
     let _: fn() -> OwnWindows = apps::own_windows;
 
-    let _: fn(&str) -> tokio::process::Command = shell::command;
+    let _: fn(&str, Option<&str>) -> Result<tokio::process::Command, String> = shell::command;
 };

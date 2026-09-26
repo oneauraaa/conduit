@@ -5,9 +5,8 @@ pub const OS: &str = "Linux";
 
 pub const DEVICE: &str = "Linux machine";
 
-/// What `run_shell` actually spawns — the user's own login shell, so naming a
-/// specific one here would be a guess. See `shell::command`.
-pub const SHELL: &str = "your login shell";
+/// What `run_shell` spawns by default and how the agent can choose another.
+pub const SHELL: &str = "your login shell by default; set its shell argument to any installed shell (such as bash, zsh, or fish)";
 
 /// The real key behind the `"cmd"` modifier token. Linux has no Command key,
 /// so the shortcut modifier every `cmd+…` combo lands on is Control.

@@ -12,7 +12,7 @@ use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use crate::browser::BrowserManager;
-use crate::mcp::catalog;
+use crate::mcp::catalog::{self, ActionSurface};
 
 pub const DEFAULT_PORT: u16 = 6767;
 
@@ -160,12 +160,18 @@ pub struct Settings {
     /// Show the screen edge glow while the agent uses browser tools.
     #[serde(default)]
     pub outline_browser: bool,
+    /// Show the screen edge glow for tools that do not drive the desktop or browser.
+    #[serde(default)]
+    pub outline_background: bool,
     /// Show the status pill while the agent uses desktop tools.
     #[serde(default = "default_true")]
     pub pill_desktop: bool,
     /// Show the status pill while the agent uses browser tools.
     #[serde(default = "default_true")]
     pub pill_browser: bool,
+    /// Show the status pill for tools that do not drive the desktop or browser.
+    #[serde(default)]
+    pub pill_background: bool,
     /// Browser-specific policy overrides Manual/Auto/Full for these four data
     /// boundaries. Hard tool gates and Panic Stop still win.
     #[serde(default)]
@@ -192,8 +198,10 @@ impl Default for Settings {
             browser_auto_start: true,
             outline_desktop: true,
             outline_browser: false,
+            outline_background: false,
             pill_desktop: true,
             pill_browser: true,
+            pill_background: false,
             browser_permissions: BrowserPermissions::default(),
         }
     }
@@ -204,11 +212,35 @@ fn default_true() -> bool {
 }
 
 impl Settings {
-    pub fn show_pill(&self, browser_action: bool) -> bool {
-        if browser_action {
-            self.pill_browser
-        } else {
-            self.pill_desktop
+    pub fn show_pill(&self, surface: ActionSurface) -> bool {
+        match surface {
+            ActionSurface::Desktop => self.pill_desktop,
+            ActionSurface::Browser => self.pill_browser,
+            ActionSurface::Background => self.pill_background,
+        }
+    }
+
+    pub fn set_tools_access(&mut self, access: ToolsAccess) {
+        if access == ToolsAccess::All || (self.tools_access == ToolsAccess::All && access == ToolsAccess::Custom) {
+            self.tool_toggles.clear();
+        }
+        self.tools_access = access;
+    }
+
+    pub fn set_tool_enabled(&mut self, tool: String, enabled: bool) {
+        match self.tools_access {
+            ToolsAccess::All if !enabled => {
+                self.tool_toggles.clear();
+                self.tool_toggles.insert(tool, false);
+                self.tools_access = ToolsAccess::Custom;
+            }
+            ToolsAccess::Custom => {
+                self.tool_toggles.insert(tool, enabled);
+                if catalog::CATALOG.iter().all(|tool| self.tool_toggles.get(tool.name).copied().unwrap_or(true)) {
+                    self.set_tools_access(ToolsAccess::All);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -259,7 +291,7 @@ pub struct ControlState {
     pub agent: Option<String>,
     pub mode: AccessMode,
     pub action: Option<String>,
-    pub browser_action: bool,
+    pub action_surface: ActionSurface,
     /// A panic stop is latched: agents are refused until the user hands control
     /// back. Surfaced so the UI can offer that, because otherwise the only way
     /// out is restarting the app — which is exactly the bug this field exists
@@ -463,7 +495,7 @@ impl AppState {
                 agent: None,
                 mode,
                 action: None,
-                browser_action: false,
+                action_surface: ActionSurface::Desktop,
                 stopped: false,
             }),
             server_cancel: RwLock::new(None),
@@ -520,7 +552,7 @@ impl AppState {
         };
         crate::store::save(&self.app, &next);
         let _ = self.app.emit("settings:changed", &next);
-        crate::chrome::sync_pill_visibility(&self.app);
+        crate::chrome::sync_control_chrome(&self.app);
         next
     }
 
@@ -567,7 +599,7 @@ impl AppState {
 
     /// Marks an agent as driving and shows the overlay + pill. Idempotent, so
     /// every tool call can call it without thrashing the windows.
-    pub fn begin_control(&self, agent: Option<String>, action: &str, browser_action: bool) {
+    pub fn begin_control(&self, agent: Option<String>, action: &str, surface: ActionSurface) {
         let was_idle = self.control.read().phase == ControlPhase::Idle;
         if was_idle {
             // Note: this does *not* clear `aborted`. The gate refuses a
@@ -581,7 +613,7 @@ impl AppState {
                 c.agent = agent.clone();
                 c.mode = mode;
                 c.action = Some(action.to_string());
-                c.browser_action = browser_action;
+                c.action_surface = surface;
             });
             crate::chrome::show_control_chrome(&self.app);
         } else {
@@ -590,9 +622,9 @@ impl AppState {
                     c.agent = agent.clone();
                 }
                 c.action = Some(action.to_string());
-                c.browser_action = browser_action;
+                c.action_surface = surface;
             });
-            crate::chrome::sync_pill_visibility(&self.app);
+            crate::chrome::sync_control_chrome(&self.app);
         }
     }
 
@@ -607,7 +639,7 @@ impl AppState {
             c.phase = ControlPhase::Idle;
             c.agent = None;
             c.action = None;
-            c.browser_action = false;
+            c.action_surface = ActionSurface::Desktop;
         });
         let _ = self.app.emit("control:approval", Option::<PendingApproval>::None);
         crate::chrome::hide_control_chrome(&self.app);
@@ -686,7 +718,7 @@ impl AppState {
             },
         );
         let _ = self.app.emit("control:approval", Some(&req));
-        crate::chrome::sync_pill_visibility(&self.app);
+        crate::chrome::sync_control_chrome(&self.app);
         rx
     }
 
@@ -695,7 +727,7 @@ impl AppState {
             let _ = waiter.sender.send(decision);
         }
         let _ = self.app.emit("control:approval", self.pending_approval());
-        crate::chrome::sync_pill_visibility(&self.app);
+        crate::chrome::sync_control_chrome(&self.app);
     }
 
     /// Denies only browser-related approval cards. Browser Stop and Restart
@@ -717,14 +749,14 @@ impl AppState {
         }
         drop(approvals);
         let _ = self.app.emit("control:approval", self.pending_approval());
-        crate::chrome::sync_pill_visibility(&self.app);
+        crate::chrome::sync_control_chrome(&self.app);
     }
 
     /// Drops a request that timed out, so the map doesn't grow unbounded.
     pub fn close_approval(&self, id: &str) {
         self.approvals.write().remove(id);
         let _ = self.app.emit("control:approval", self.pending_approval());
-        crate::chrome::sync_pill_visibility(&self.app);
+        crate::chrome::sync_control_chrome(&self.app);
     }
 
     /* ── logging ── */
@@ -756,7 +788,7 @@ fn pill_should_be_visible(
     approval_pending: bool,
 ) -> bool {
     control.phase == ControlPhase::Active
-        && (settings.show_pill(control.browser_action) || approval_pending)
+        && (settings.show_pill(control.action_surface) || approval_pending)
 }
 
 pub struct ActiveCallGuard<'a> {
@@ -782,7 +814,14 @@ pub fn catalog_for_ui(browser_ready: bool) -> Vec<catalog::ToolDef> {
     catalog::CATALOG
         .iter()
         .filter(|tool| browser_ready || !matches!(tool.group, catalog::ToolGroup::Browser))
-        .cloned()
+        .map(|tool| {
+            let mut tool = tool.clone();
+            if cfg!(target_os = "linux") && tool.name == "run_shell" {
+                tool.group = catalog::ToolGroup::Linux;
+                tool.summary = "run a command in any installed shell and capture its output";
+            }
+            tool
+        })
         .collect()
 }
 
@@ -797,14 +836,18 @@ mod tests {
         object.remove("browserAutoStart");
         object.remove("outlineDesktop");
         object.remove("outlineBrowser");
+        object.remove("outlineBackground");
         object.remove("pillDesktop");
         object.remove("pillBrowser");
+        object.remove("pillBackground");
         let loaded: Settings = serde_json::from_value(saved).unwrap();
         assert!(loaded.browser_auto_start);
         assert!(loaded.outline_desktop);
         assert!(!loaded.outline_browser);
+        assert!(!loaded.outline_background);
         assert!(loaded.pill_desktop);
         assert!(loaded.pill_browser);
+        assert!(!loaded.pill_background);
     }
 
     #[test]
@@ -812,10 +855,12 @@ mod tests {
         let settings = Settings {
             pill_desktop: false,
             pill_browser: true,
+            pill_background: false,
             ..Settings::default()
         };
-        assert!(!settings.show_pill(false));
-        assert!(settings.show_pill(true));
+        assert!(!settings.show_pill(ActionSurface::Desktop));
+        assert!(settings.show_pill(ActionSurface::Browser));
+        assert!(!settings.show_pill(ActionSurface::Background));
     }
 
     #[test]
@@ -823,6 +868,7 @@ mod tests {
         let settings = Settings {
             pill_desktop: false,
             pill_browser: false,
+            pill_background: false,
             ..Settings::default()
         };
         let control = ControlState {
@@ -830,7 +876,7 @@ mod tests {
             agent: None,
             mode: AccessMode::Full,
             action: None,
-            browser_action: true,
+            action_surface: ActionSurface::Background,
             stopped: false,
         };
         assert!(!pill_should_be_visible(&control, &settings, false));
@@ -843,6 +889,30 @@ mod tests {
             &settings,
             true,
         ));
+    }
+
+    #[test]
+    fn tool_switches_move_between_all_and_custom() {
+        let mut settings = Settings::default();
+        settings.tool_toggles.insert("run_shell".into(), false);
+        settings.set_tool_enabled("create_folder".into(), false);
+        assert_eq!(settings.tools_access, ToolsAccess::Custom);
+        assert!(settings.tool_enabled("run_shell"));
+        assert!(!settings.tool_enabled("create_folder"));
+        settings.set_tool_enabled("create_folder".into(), true);
+        assert_eq!(settings.tools_access, ToolsAccess::All);
+        assert!(settings.tool_toggles.is_empty());
+    }
+
+    #[test]
+    fn last_disabled_tool_restores_all_tools() {
+        let mut settings = Settings::default();
+        settings.set_tool_enabled("run_shell".into(), false);
+        settings.set_tool_enabled("create_folder".into(), false);
+        settings.set_tool_enabled("run_shell".into(), true);
+        assert_eq!(settings.tools_access, ToolsAccess::Custom);
+        settings.set_tool_enabled("create_folder".into(), true);
+        assert_eq!(settings.tools_access, ToolsAccess::All);
     }
 
     /// The UI reads these keys by name. A mismatch is invisible on the Rust
@@ -940,12 +1010,22 @@ mod tests {
     fn browser_tools_are_hidden_until_the_runtime_is_ready() {
         let without_browser = catalog_for_ui(false);
         let with_browser = catalog_for_ui(true);
-        assert_eq!(without_browser.len(), 24);
-        assert_eq!(with_browser.len(), 44);
+        assert_eq!(without_browser.len(), 25);
+        assert_eq!(with_browser.len(), 45);
         assert!(
             without_browser
                 .iter()
                 .all(|tool| !matches!(tool.group, crate::mcp::catalog::ToolGroup::Browser))
+        );
+    }
+
+    #[test]
+    fn shell_tool_uses_linux_group_only_on_linux() {
+        let catalog = catalog_for_ui(false);
+        let shell = catalog.iter().find(|tool| tool.name == "run_shell").unwrap();
+        assert_eq!(
+            matches!(shell.group, crate::mcp::catalog::ToolGroup::Linux),
+            cfg!(target_os = "linux")
         );
     }
 }

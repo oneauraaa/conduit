@@ -16,7 +16,13 @@ pub(crate) const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 /// default on a stock Windows 11 — writes stdout in the console's OEM codepage,
 /// so any non-ASCII output would reach `from_utf8_lossy` as mojibake. Forcing
 /// UTF-8 on both the input and output encodings makes it round-trip.
-pub fn command(script: &str) -> tokio::process::Command {
+pub fn command(
+    script: &str,
+    requested_shell: Option<&str>,
+) -> Result<tokio::process::Command, String> {
+    if requested_shell.is_some() {
+        return Err("shell selection is available only on Linux".into());
+    }
     let mut cmd = tokio::process::Command::new("powershell.exe");
     cmd.arg("-NoProfile")
         .arg("-NonInteractive")
@@ -27,5 +33,5 @@ pub fn command(script: &str) -> tokio::process::Command {
             "$OutputEncoding=[Console]::OutputEncoding=[Text.Encoding]::UTF8; {script}"
         ))
         .creation_flags(CREATE_NO_WINDOW);
-    cmd
+    Ok(cmd)
 }

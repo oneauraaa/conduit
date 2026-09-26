@@ -406,12 +406,16 @@
     "name": "run_shell",
     "group": "system",
     "risky": true,
-    "description": "Run a command and capture output. The host handshake identifies the shell: zsh on macOS, PowerShell on Windows, login shell on Linux.",
+    "description": "Run a command and capture output. On Linux, the optional shell argument selects any installed shell; otherwise the user's login shell is used. macOS uses zsh and Windows uses PowerShell.",
     "parameters": {
       "type": "object",
       "properties": {
         "command": {
           "type": "string"
+        },
+        "shell": {
+          "type": "string",
+          "description": "Linux only: installed shell name on PATH or executable path, such as bash, zsh, or fish. Omit to use the user's login shell."
         },
         "timeout_seconds": {
           "type": "integer",
@@ -421,6 +425,24 @@
       },
       "required": [
         "command"
+      ]
+    }
+  },
+  {
+    "name": "create_folder",
+    "group": "system",
+    "risky": true,
+    "description": "Create a folder at an absolute path, including missing parent folders. An existing folder is accepted.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Absolute path of the folder to create. Missing parent folders are created."
+        }
+      },
+      "required": [
+        "path"
       ]
     }
   },

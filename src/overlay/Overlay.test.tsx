@@ -19,7 +19,7 @@ const active: ControlState = {
   agent: "codex",
   mode: "full",
   action: "checking displays",
-  browserAction: false,
+  actionSurface: "desktop",
   stopped: false,
 };
 
@@ -40,7 +40,16 @@ it("removes the desktop outline immediately when browser work starts", async () 
   const { container } = render(<Overlay />);
   await vi.waitFor(() => expect(container.querySelectorAll(".animate-breathe")).toHaveLength(4));
 
-  act(() => onState({ ...active, browserAction: true }));
+  act(() => onState({ ...active, actionSurface: "browser" }));
+
+  expect(container.querySelectorAll(".animate-breathe")).toHaveLength(0);
+});
+
+it("hides the outline for background work by default", async () => {
+  const { container } = render(<Overlay />);
+  await vi.waitFor(() => expect(container.querySelectorAll(".animate-breathe")).toHaveLength(4));
+
+  act(() => onState({ ...active, actionSurface: "background" }));
 
   expect(container.querySelectorAll(".animate-breathe")).toHaveLength(0);
 });

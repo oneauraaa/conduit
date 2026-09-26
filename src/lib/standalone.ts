@@ -90,8 +90,10 @@ export const settings: Settings = {
   browserAutoStart: true,
   outlineDesktop: true,
   outlineBrowser: false,
+  outlineBackground: false,
   pillDesktop: true,
   pillBrowser: true,
+  pillBackground: false,
   browserPermissions: {
     openWebsites: "alwaysAllow",
     readHistory: "alwaysAllow",
@@ -264,7 +266,7 @@ export const control: ControlState = {
   agent: null,
   mode: "auto",
   action: null,
-  browserAction: false,
+  actionSurface: "desktop",
   stopped: false,
 };
 
@@ -289,7 +291,8 @@ export const catalog: ToolDef[] = [
   { name: "web_search", group: "system", summary: "search the web with DuckDuckGo", risky: false },
   { name: "clipboard_read", group: "system", summary: "read the clipboard's text", risky: false },
   { name: "clipboard_write", group: "system", summary: "replace the clipboard's text", risky: true },
-  { name: "run_shell", group: "system", summary: "run a shell command and capture its output", risky: true },
+  { name: "run_shell", group: isLinux ? "linux" : "system", summary: isLinux ? "run a command in any installed shell and capture its output" : "run a shell command and capture its output", risky: true },
+  { name: "create_folder", group: "system", summary: "create a folder and missing parents at an absolute path", risky: true },
   { name: "wait", group: "system", summary: "pause, to let the ui settle", risky: false },
   { name: "notify", group: "system", summary: "post a notification", risky: false },
   { name: "list_keybinds", group: "system", summary: "the keyboard shortcuts the user has bound", risky: false },

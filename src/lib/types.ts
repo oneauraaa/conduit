@@ -17,7 +17,7 @@ export type AccessMode = "manual" | "auto" | "full";
 /** Master gate over the whole tool catalog. Only the Tools tab may change it. */
 export type ToolsAccess = "all" | "custom" | "off";
 
-export type ToolGroup = "vision" | "input" | "windows" | "accessibility" | "system" | "browser";
+export type ToolGroup = "vision" | "input" | "windows" | "accessibility" | "system" | "linux" | "browser";
 
 export type BrowserPermissionMode = "alwaysAllow" | "alwaysAsk";
 export type BrowserPermissionCategory =
@@ -67,8 +67,10 @@ export interface Settings {
   browserAutoStart: boolean;
   outlineDesktop: boolean;
   outlineBrowser: boolean;
+  outlineBackground: boolean;
   pillDesktop: boolean;
   pillBrowser: boolean;
+  pillBackground: boolean;
   browserPermissions: BrowserPermissions;
 }
 
@@ -307,6 +309,7 @@ export interface PulseEvent {
 }
 
 export type ControlPhase = "idle" | "active";
+export type ActionSurface = "desktop" | "browser" | "background";
 
 export interface ControlState {
   phase: ControlPhase;
@@ -316,8 +319,8 @@ export interface ControlState {
   mode: AccessMode;
   /** Human-readable current action, e.g. "clicking". */
   action: string | null;
-  /** Whether the latest agent action uses the built-in browser. */
-  browserAction: boolean;
+  /** Which interface the latest agent action uses. */
+  actionSurface: ActionSurface;
   /**
    * A panic stop is latched. Every tool stays refused until the user hands
    * control back — the stop button is not meant to be undone by an agent that

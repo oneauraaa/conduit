@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import { motion } from "motion/react";
 import { Bot, Globe2, Server, SlidersHorizontal, Wrench, type LucideIcon } from "lucide-react";
 import { HyprlandIcon } from "./HyprlandIcon";
@@ -7,6 +9,7 @@ import { Logo } from "./Logo";
 import { ThemeToggle } from "./ThemeToggle";
 import { StatusDot } from "./StatusDot";
 import type { ServerStatus } from "@/lib/types";
+import { version as bundledVersion } from "../../package.json";
 
 export type Tab = "server" | "browser" | "tools" | "agents" | "hyprland" | "tailscale" | "settings";
 
@@ -37,6 +40,14 @@ export function Sidebar({
    *  that is grayed says "not here", which is the true thing. */
   disabled?: Partial<Record<Tab, boolean>>;
 }) {
+  const [version, setVersion] = useState(bundledVersion);
+
+  useEffect(() => {
+    if ("__TAURI_INTERNALS__" in window) {
+      void getVersion().then(setVersion).catch(() => {});
+    }
+  }, []);
+
   return (
     <nav className="flex w-[168px] shrink-0 flex-col border-r hairline bg-[rgb(var(--surface-sunken)/0.6)]">
       {/* Brand. Sits under the drag strip, so it moves the window too. */}
@@ -102,7 +113,7 @@ export function Sidebar({
 
       <div className="flex items-center justify-between px-3 py-2.5">
         <span className="text-[10px] tracking-wide text-[rgb(var(--text-faint))] tabular-nums">
-          v1.0
+          v{version}
         </span>
         <ThemeToggle />
       </div>

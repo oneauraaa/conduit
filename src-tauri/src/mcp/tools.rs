@@ -160,9 +160,20 @@ pub struct ShellArgs {
     /// PowerShell on Windows, the user's login shell on Linux. The handshake
     /// instructions name the one on this machine.
     pub command: String,
+    /// On Linux, choose any installed shell (for example bash, zsh, or fish).
+    /// Accepts a name on PATH or an executable path. Defaults to the user's
+    /// login shell. Shell selection is unavailable on macOS and Windows.
+    #[serde(default)]
+    pub shell: Option<String>,
     /// Give up after this many seconds. Defaults to 30.
     #[serde(default)]
     pub timeout_seconds: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct FolderArgs {
+    /// Absolute path of the folder to create. Missing parent folders are created.
+    pub path: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -238,6 +249,14 @@ fn parse_button(s: Option<&str>) -> Button {
         Some("middle") => Button::Middle,
         _ => Button::Left,
     }
+}
+
+fn create_folder_path(path: &str) -> Result<(), String> {
+    let folder = std::path::Path::new(path);
+    if !folder.is_absolute() {
+        return Err("folder path must be absolute".into());
+    }
+    std::fs::create_dir_all(folder).map_err(|error| format!("could not create folder: {error}"))
 }
 
 #[derive(Clone)]
@@ -893,7 +912,14 @@ impl Conduit {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let agent = self.agent(&ctx);
-        let detail = Some(args.command.chars().take(64).collect::<String>());
+        let detail = Some(match &args.shell {
+            Some(shell) => format!(
+                "{}: {}",
+                shell.chars().take(64).collect::<String>(),
+                args.command.chars().take(64).collect::<String>()
+            ),
+            None => args.command.chars().take(64).collect::<String>(),
+        });
 
         gate::run(
             &self.state,
@@ -903,7 +929,8 @@ impl Conduit {
                     args.timeout_seconds.unwrap_or(30).clamp(1, 300),
                 );
 
-                let child = shell::command(&args.command)
+                let child = shell::command(&args.command, args.shell.as_deref())
+                    .map_err(fail)?
                     .stdout(std::process::Stdio::piped())
                     .stderr(std::process::Stdio::piped())
                     .spawn()
@@ -938,6 +965,30 @@ impl Conduit {
                     body.push_str("(no output)");
                 }
                 ok(format!("exit {code}\n\n{body}"))
+            },
+        )
+        .await
+    }
+
+    #[tool(description = "Create a folder at an absolute path, including missing parent folders. An existing folder is accepted.")]
+    async fn create_folder(
+        &self,
+        Parameters(args): Parameters<FolderArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        let agent = self.agent(&ctx);
+        let detail = Some(args.path.chars().take(120).collect());
+        gate::run(
+            &self.state,
+            CallCtx { tool: "create_folder", detail, agent },
+            || async move {
+                let path = args.path;
+                let created = path.clone();
+                tokio::task::spawn_blocking(move || create_folder_path(&created))
+                    .await
+                    .map_err(|error| fail(format!("folder worker failed: {error}")))?
+                    .map_err(fail)?;
+                ok(format!("folder ready: {path}"))
             },
         )
         .await
@@ -1630,7 +1681,7 @@ impl ServerHandler for Conduit {
 
 #[cfg(test)]
 mod tests {
-    use super::{browser_history_tool, instructions, pinned_browser_tools, Conduit};
+    use super::{browser_history_tool, create_folder_path, instructions, pinned_browser_tools, Conduit};
     use crate::platform::host;
 
     /// The handshake is the only place in the MCP surface that can name this
@@ -1692,9 +1743,9 @@ mod tests {
     }
 
     #[test]
-    fn router_contains_twenty_four_desktop_and_twenty_browser_tools() {
+    fn router_contains_twenty_five_desktop_and_twenty_browser_tools() {
         let tools = Conduit::tool_router().list_all();
-        assert_eq!(tools.len(), 44);
+        assert_eq!(tools.len(), 45);
         assert_eq!(
             tools
                 .iter()
@@ -1702,6 +1753,29 @@ mod tests {
                 .count(),
             20
         );
+    }
+
+    #[test]
+    fn run_shell_schema_advertises_optional_shell_selection() {
+        let tool = Conduit::tool_router().get("run_shell").unwrap().clone();
+        let value = serde_json::to_value(tool).unwrap();
+        assert!(value["inputSchema"]["properties"]["shell"].is_object());
+        assert!(!value["inputSchema"]["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|field| field == "shell"));
+    }
+
+    #[test]
+    fn create_folder_requires_absolute_path_and_creates_missing_parents() {
+        assert!(create_folder_path("relative/folder").is_err());
+        let root = std::env::temp_dir().join(format!("conduit-folder-test-{}", crate::random::uuid_v4()));
+        let folder = root.join("parent").join("child");
+        create_folder_path(folder.to_str().unwrap()).unwrap();
+        assert!(folder.is_dir());
+        create_folder_path(folder.to_str().unwrap()).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

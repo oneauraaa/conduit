@@ -28,9 +28,11 @@ export function Overlay() {
   const [control, setControl] = useState<ControlState | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
   const active = demo || control?.phase === "active";
-  const showOutline = demo || (active && (control?.browserAction
+  const showOutline = demo || (active && (control?.actionSurface === "browser"
     ? settings?.outlineBrowser ?? false
-    : settings?.outlineDesktop ?? true));
+    : control?.actionSurface === "background"
+      ? settings?.outlineBackground ?? false
+      : settings?.outlineDesktop ?? true));
   useEffect(() => {
     if (demo) return;
     // Pull the current state as well as subscribing: this webview is created
@@ -67,7 +69,7 @@ export function Overlay() {
         </div>
       )}
 
-      <AiCursor active={active} demo={demo} />
+      <AiCursor active={active && control?.actionSurface !== "background"} demo={demo} />
     </div>
   );
 }

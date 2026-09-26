@@ -5,8 +5,10 @@
 //! through `ns_window()` / `hwnd()` for the last few properties.
 
 use parking_lot::RwLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, Wry};
 
+use crate::mcp::catalog::ActionSurface;
 use crate::platform::screen;
 use crate::platform::types::{Display, OwnWindows};
 
@@ -27,6 +29,7 @@ const PILL_H: f64 = 300.0;
 /// Display geometry, cached because NSScreen may only be read on the main
 /// thread and tool calls arrive on tokio workers.
 static DISPLAYS: RwLock<Vec<Display>> = RwLock::new(Vec::new());
+static CURSOR_HIDDEN: AtomicBool = AtomicBool::new(false);
 
 pub fn cached_displays() -> Vec<Display> {
     DISPLAYS.read().clone()
@@ -279,9 +282,7 @@ pub fn show_control_chrome(app: &AppHandle<Wry>) {
         // apart by window level (1002 over 1001), but Windows orders topmost
         // windows by which was raised most recently — show them the other way
         // round there and the glow covers the stop button.
-        sync_pill_visibility_on_main(&app);
-
-        crate::platform::input::hide_system_cursor();
+        sync_control_chrome_on_main(&app);
 
         let _ = tauri::Emitter::emit(
             &app,
@@ -291,14 +292,15 @@ pub fn show_control_chrome(app: &AppHandle<Wry>) {
     });
 }
 
-/// Applies the current action's visibility preference without remapping an
-/// already visible layer surface. Approval cards always remain reachable.
-pub fn sync_pill_visibility(app: &AppHandle<Wry>) {
+/// Applies the current action's pill and cursor visibility. Approval cards
+/// always remain reachable, even when the status pill is switched off.
+pub fn sync_control_chrome(app: &AppHandle<Wry>) {
     let app = app.clone();
-    let _ = app.clone().run_on_main_thread(move || sync_pill_visibility_on_main(&app));
+    let _ = app.clone().run_on_main_thread(move || sync_control_chrome_on_main(&app));
 }
 
-fn sync_pill_visibility_on_main(app: &AppHandle<Wry>) {
+fn sync_control_chrome_on_main(app: &AppHandle<Wry>) {
+    sync_cursor_visibility_on_main(app);
     let Some(pill) = app.get_webview_window("pill") else {
         tracing::warn!("pill window is missing");
         return;
@@ -318,6 +320,18 @@ fn sync_pill_visibility_on_main(app: &AppHandle<Wry>) {
     }
 }
 
+fn sync_cursor_visibility_on_main(app: &AppHandle<Wry>) {
+    let control = app.state::<crate::state::Shared>().control();
+    let should_hide = control.phase == crate::state::ControlPhase::Active
+        && control.action_surface != ActionSurface::Background;
+    let was_hidden = CURSOR_HIDDEN.swap(should_hide, Ordering::SeqCst);
+    if should_hide && !was_hidden {
+        crate::platform::input::hide_system_cursor();
+    } else if !should_hide && was_hidden {
+        crate::platform::input::show_system_cursor();
+    }
+}
+
 pub fn hide_control_chrome(app: &AppHandle<Wry>) {
     let app = app.clone();
     let _ = app.clone().run_on_main_thread(move || {
@@ -334,7 +348,7 @@ pub fn hide_control_chrome(app: &AppHandle<Wry>) {
             let _ = pill.hide();
         }
 
-        crate::platform::input::show_system_cursor();
+        sync_cursor_visibility_on_main(&app);
     });
 }
 

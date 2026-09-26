@@ -40,8 +40,31 @@ const local: Record<string, (args: Record<string, unknown>) => unknown> = {
       ? [...standalone.catalog, ...standalone.browserCatalog]
       : standalone.catalog,
   set_default_access: (a) => ({ ...standalone.settings, defaultAccess: a.mode }),
-  set_tools_access: (a) => ({ ...standalone.settings, toolsAccess: a.access }),
-  set_tool_enabled: () => standalone.settings,
+  set_tools_access: (a) => {
+    const access = a.access as ToolsAccess;
+    if (access === "all" || (standalone.settings.toolsAccess === "all" && access === "custom")) {
+      standalone.settings.toolToggles = {};
+    }
+    standalone.settings.toolsAccess = access;
+    return { ...standalone.settings };
+  },
+  set_tool_enabled: (a) => {
+    const tool = a.tool as string;
+    const enabled = a.enabled as boolean;
+    if (standalone.settings.toolsAccess === "all" && !enabled) {
+      standalone.settings.toolToggles = { [tool]: false };
+      standalone.settings.toolsAccess = "custom";
+    } else if (standalone.settings.toolsAccess === "custom") {
+      standalone.settings.toolToggles[tool] = enabled;
+      if ([...standalone.catalog, ...standalone.browserCatalog].every(
+        (entry) => standalone.settings.toolToggles[entry.name] ?? true,
+      )) {
+        standalone.settings.toolToggles = {};
+        standalone.settings.toolsAccess = "all";
+      }
+    }
+    return { ...standalone.settings };
+  },
   get_browser_state: () => ({ ...standalone.browser }),
   refresh_browser_install: () => ({ ...standalone.browser }),
   install_browser: () => {
@@ -134,12 +157,20 @@ const local: Record<string, (args: Record<string, unknown>) => unknown> = {
     standalone.settings.outlineBrowser = a.enabled as boolean;
     return { ...standalone.settings };
   },
+  set_outline_background: (a) => {
+    standalone.settings.outlineBackground = a.enabled as boolean;
+    return { ...standalone.settings };
+  },
   set_pill_desktop: (a) => {
     standalone.settings.pillDesktop = a.enabled as boolean;
     return { ...standalone.settings };
   },
   set_pill_browser: (a) => {
     standalone.settings.pillBrowser = a.enabled as boolean;
+    return { ...standalone.settings };
+  },
+  set_pill_background: (a) => {
+    standalone.settings.pillBackground = a.enabled as boolean;
     return { ...standalone.settings };
   },
   get_readiness: () => standalone.readiness,
@@ -239,10 +270,14 @@ export const setOutlineDesktop = (enabled: boolean) =>
   invoke<Settings>("set_outline_desktop", { enabled });
 export const setOutlineBrowser = (enabled: boolean) =>
   invoke<Settings>("set_outline_browser", { enabled });
+export const setOutlineBackground = (enabled: boolean) =>
+  invoke<Settings>("set_outline_background", { enabled });
 export const setPillDesktop = (enabled: boolean) =>
   invoke<Settings>("set_pill_desktop", { enabled });
 export const setPillBrowser = (enabled: boolean) =>
   invoke<Settings>("set_pill_browser", { enabled });
+export const setPillBackground = (enabled: boolean) =>
+  invoke<Settings>("set_pill_background", { enabled });
 
 /* ── readiness ──────────────────────────────────────────────── */
 

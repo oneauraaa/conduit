@@ -66,8 +66,10 @@ function settings(): Settings {
     browserAutoStart: true,
     outlineDesktop: true,
     outlineBrowser: false,
+    outlineBackground: false,
     pillDesktop: true,
     pillBrowser: true,
+    pillBackground: false,
     browserPermissions: {
       openWebsites: "alwaysAllow",
       readHistory: "alwaysAllow",

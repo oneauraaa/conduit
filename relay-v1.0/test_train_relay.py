@@ -87,7 +87,7 @@ class DatasetTests(unittest.TestCase):
                 self.assertEqual(self.by_name[name]['risky'],risk[1]=='true')
 
     def test_relay_catalog_has_generated_twenty_tool_browser_surface(self):
-        self.assertEqual(len(self.by_name),44)
+        self.assertEqual(len(self.by_name),45)
         self.assertEqual(sum(name.startswith('browser_') for name in self.by_name),20)
 
     def test_all_four_browser_permission_categories_have_allow_and_deny_scenarios(self):

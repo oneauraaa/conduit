@@ -1,6 +1,6 @@
 # Relay v1.0
 
-Relay is a QLoRA adapter for Ornith 1.5 9B tuned on Conduit's 44-tool catalog,
+Relay is a QLoRA adapter for Ornith 1.5 9B tuned on Conduit's 45-tool catalog,
 including the optional built-in browser and its permission precedence rules.
 
 The existing `Ornith-1.5-9B-Q4_K_M.gguf` is kept as a reference. Training uses the Hugging Face BF16 checkpoint because standard QLoRA tooling cannot train a GGUF file directly. The pipeline loads that checkpoint in 4-bit NF4, trains only language-model LoRA layers, merges the adapter, and exports a separate Q4_K_M GGUF.

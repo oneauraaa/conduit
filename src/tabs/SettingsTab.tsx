@@ -20,8 +20,10 @@ import {
   setCorsEnabled,
   setCorsOrigins,
   setOutlineBrowser,
+  setOutlineBackground,
   setOutlineDesktop,
   setPillBrowser,
+  setPillBackground,
   setPillDesktop,
   setStartHidden,
   setStartOnLogin,
@@ -232,6 +234,17 @@ export function SettingsTab() {
               label="show outline for browser actions"
             />
           </Row>
+          <Row
+            icon={<Power size={15} />}
+            title="background actions"
+            description="show the outline for shell commands, folders, search, clipboard, and other tools that do not control the screen"
+          >
+            <Switch
+              checked={settings?.outlineBackground ?? false}
+              onChange={(enabled) => void updateAppearanceSetting(() => setOutlineBackground(enabled))}
+              label="show outline for background actions"
+            />
+          </Row>
         </Card>
       </div>
 
@@ -258,6 +271,17 @@ export function SettingsTab() {
               checked={settings?.pillBrowser ?? true}
               onChange={(enabled) => void updateAppearanceSetting(() => setPillBrowser(enabled))}
               label="show pill for browser actions"
+            />
+          </Row>
+          <Row
+            icon={<Power size={15} />}
+            title="background actions"
+            description="show the status pill for shell commands, folders, search, clipboard, and other background tools; approval requests still appear"
+          >
+            <Switch
+              checked={settings?.pillBackground ?? false}
+              onChange={(enabled) => void updateAppearanceSetting(() => setPillBackground(enabled))}
+              label="show pill for background actions"
             />
           </Row>
         </Card>

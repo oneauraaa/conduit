@@ -60,7 +60,7 @@ export function Pill() {
     agent: demo ? "claude code" : null,
     mode: "auto",
     action: demo ? "clicking" : null,
-    browserAction: false,
+    actionSurface: "desktop",
     stopped: false,
   });
   const [approval, setApproval] = useState<PendingApproval | null>(

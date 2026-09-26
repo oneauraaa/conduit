@@ -20,7 +20,7 @@ const active: ControlState = {
   agent: "codex",
   mode: "full",
   action: "checking displays",
-  browserAction: false,
+  actionSurface: "desktop",
   stopped: false,
 };
 
